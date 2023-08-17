@@ -4060,59 +4060,34 @@ TEST_F(ValidationTest, ComputeNodeCompatibility) {
   std::vector<LPCWSTR> pArguments = { L"-HV", L"2021" };
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
-    {"!11 = !{i32 8, i32 15"},  // original: node shader
-    {"!11 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node01 Coalescing launch type is not compatible with Compute");
+    {"!11 = !{i32 8, i32 15"}, // original: node shader
+    {"!11 = !{i32 8, i32 5"},  // changed to: compute shader
+    "Node 'node01' with input/outputs is not compatible with compute",
+    false);
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
-    {"!18 = !{i32 8, i32 15"},  // original: node shader
-    {"!18 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node02 Coalescing launch type is not compatible with Compute");
+    {"!19 = !{i32 8, i32 15"}, // original: node shader
+    {"!19 = !{i32 8, i32 5"},  // changed to: compute shader
+    "Node 'node02' with input/outputs is not compatible with compute",
+    false);
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
-    {"!24 = !{i32 8, i32 15"},  // original: node shader
-    {"!24 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node03 Coalescing launch type is not compatible with Compute");
+    {"!25 = !{i32 8, i32 15"}, // original: node shader
+    {"!25 = !{i32 8, i32 5"},  // changed to: compute shader
+    "Node 'node03' with input/outputs is not compatible with compute",
+    false);
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
-    {"!29 = !{i32 8, i32 15"},  // original: node shader
-    {"!29 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node04 Coalescing launch type is not compatible with Compute");
+    {"!34 = !{i32 8, i32 15"}, // original: node shader
+    {"!34 = !{i32 8, i32 5"},  // changed to: compute shader
+    "Node 'node04' coalescing launch type is not compatible with compute",
+    false);
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
-    {"!32 = !{i32 8, i32 15"},  // original: node shader
-    {"!32 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node05 Thread launch type is not compatible with Compute");
-  RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
-    pArguments.data(), 2, nullptr, 0,
-    {"!36 = !{i32 8, i32 15"},  // original: node shader
-    {"!36 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node06 Thread launch type is not compatible with Compute");
-  RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
-    pArguments.data(), 2, nullptr, 0,
-    {"!41 = !{i32 8, i32 15"},  // original: node shader
-    {"!41 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node07 Thread launch type is not compatible with Compute");
-  RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
-    pArguments.data(), 2, nullptr, 0,
-    {"!46 = !{i32 8, i32 15"},  // original: node shader
-    {"!46 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node08 with input/outputs is not compatible with Compute");
-  RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
-    pArguments.data(), 2, nullptr, 0,
-    {"!52 = !{i32 8, i32 15"},  // original: node shader
-    {"!52 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node09 with input/outputs is not compatible with Compute");
-  RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
-    pArguments.data(), 2, nullptr, 0,
-    {"!57 = !{i32 8, i32 15"},  // original: node shader
-    {"!57 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node10 with input/outputs is not compatible with Compute");
-  RewriteAssemblyCheckMsg(L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
-    pArguments.data(), 2, nullptr, 0,
-    {"!63 = !{i32 8, i32 15"},  // original: node shader
-    {"!63 = !{i32 8, i32 5"},   // changed to: compute shader
-    "Node node11 with input/outputs is not compatible with Compute");
+    {"!34 = !{i32 8, i32 15, i32 13, i32 2"}, // original: node shader, coalesing launch type
+    {"!34 = !{i32 8, i32 5, i32 13, i32 3"},  // changed to: compute shader, thread launch type
+    "Node 'node04' thread launch type is not compatible with compute",
+    false);
 }
 
 // Check validation error for incompatible node input record types
@@ -4123,69 +4098,68 @@ TEST_F(ValidationTest, NodeInputCompatibility) {
     pArguments.data(), 2, nullptr, 0,
     {"!13 = !{i32 1, i32 97"},  // DispatchNodeInputRecord
     {"!13 = !{i32 1, i32 65"},  // GroupNodeInputRecords
-    "Broadcasting node shader 'node01' has input record type that is invalid for its launch type");
+    "broadcasting node shader 'node01' has incompatible input record type (should be {RW}DispatchNodeInputRecord)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!13 = !{i32 1, i32 97"},  // DispatchNodeInputRecord
     {"!13 = !{i32 1, i32 69"},  // RWGroupNodeInputRecords
-    "Broadcasting node shader 'node01' has input record type that is invalid for its launch type");
+    "broadcasting node shader 'node01' has incompatible input record type (should be {RW}DispatchNodeInputRecord)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!13 = !{i32 1, i32 97"},  // DispatchNodeInputRecord
     {"!13 = !{i32 1, i32 33"},  // ThreadNodeInputRecord
-    "Broadcasting node shader 'node01' has input record type that is invalid for its launch type");
+    "broadcasting node shader 'node01' has incompatible input record type (should be {RW}DispatchNodeInputRecord)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!13 = !{i32 1, i32 97"},  // DispatchNodeInputRecord
     {"!13 = !{i32 1, i32 37"},  // RWThreadNodeInputRecord
-    "Broadcasting node shader 'node01' has input record type that is invalid for its launch type");
+    "broadcasting node shader 'node01' has incompatible input record type (should be {RW}DispatchNodeInputRecord)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!20 = !{i32 1, i32 65"},  // GroupNodeInputRecords
     {"!20 = !{i32 1, i32 97"},  // DispatchNodeInputRecord
-    "Coalescing node shader 'node02' has input record type that is invalid for its launch type");
+    "coalescing node shader 'node02' has incompatible input record type (should be {RW}GroupNodeInputRecords or EmptyNodeInput)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!20 = !{i32 1, i32 65"},  // GroupNodeInputRecords
     {"!20 = !{i32 1, i32 101"}, // RWDispatchNodeInputRecord
-    "Coalescing node shader 'node02' has input record type that is invalid for its launch type");
+    "coalescing node shader 'node02' has incompatible input record type (should be {RW}GroupNodeInputRecords or EmptyNodeInput)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!20 = !{i32 1, i32 65"},  // GroupNodeInputRecords
     {"!20 = !{i32 1, i32 33"},  // ThreadNodeInputRecord
-    "Coalescing node shader 'node02' has input record type that is invalid for its launch type");
+    "coalescing node shader 'node02' has incompatible input record type (should be {RW}GroupNodeInputRecords or EmptyNodeInput)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!20 = !{i32 1, i32 65"},  // GroupNodeInputRecords
     {"!20 = !{i32 1, i32 37"},  // RWThreadNodeInputRecord
-    "Coalescing node shader 'node02' has input record type that is invalid for its launch type");
+    "coalescing node shader 'node02' has incompatible input record type (should be {RW}GroupNodeInputRecords or EmptyNodeInput)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!25 = !{i32 1, i32 33"},  // ThreadNodeInputRecord
     {"!25 = !{i32 1, i32 97"},  // DispatchNodeInputRecord
-    "Thread node shader 'node03' has input record type that is invalid for its launch type");
+    "thread node shader 'node03' has incompatible input record type (should be {RW}ThreadNodeInputRecord)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!25 = !{i32 1, i32 33"},  // ThreadNodeInputRecord
     {"!25 = !{i32 1, i32 101"}, // RWDispatchNodeInputRecord
-    "Thread node shader 'node03' has input record type that is invalid for its launch type");
+    "thread node shader 'node03' has incompatible input record type (should be {RW}ThreadNodeInputRecord)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!25 = !{i32 1, i32 33"},  // ThreadNodeInputRecord
     {"!25 = !{i32 1, i32 65"},  // GroupNodeInputRecords
-    "Thread node shader 'node03' has input record type that is invalid for its launch type");
+    "thread node shader 'node03' has incompatible input record type (should be {RW}ThreadNodeInputRecord)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!25 = !{i32 1, i32 33"},  // ThreadNodeInputRecord
     {"!25 = !{i32 1, i32 69"},  // RWGroupNodeInputRecords
-    "Thread node shader 'node03' has input record type that is invalid for its launch type");
+    "thread node shader 'node03' has incompatible input record type (should be {RW}ThreadNodeInputRecord)");
   RewriteAssemblyCheckMsg(L"..\\DXILValidation\\node_input_compatibility.hlsl", "lib_6_8",
     pArguments.data(), 2, nullptr, 0,
     {"!25 = !{i32 1, i32 33"},  // ThreadNodeInputRecord
     {"!25 = !{i32 1, i32 69"},  // RWGroupNodeInputRecords
-    "Thread node shader 'node03' has input record type that is invalid for its launch type");
+    "thread node shader 'node03' has incompatible input record type (should be {RW}ThreadNodeInputRecord)");
 }
-
 
 // Check validation error for multiple input nodes of different types
 TEST_F(ValidationTest, NodeInputMultiplicity) {
