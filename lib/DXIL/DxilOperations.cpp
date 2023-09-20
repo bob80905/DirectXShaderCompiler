@@ -648,12 +648,17 @@ bool OP::IsDxilOpFuncCallInst(const llvm::Instruction *I) {
 
 bool OP::IsDxilOpFuncCallInst(const llvm::Instruction *I, OpCode opcode) {
   if (!IsDxilOpFuncCallInst(I)) return false;
-  return llvm::cast<llvm::ConstantInt>(I->getOperand(0))->getZExtValue() == (unsigned)opcode;
+  return (unsigned)getOpCode(I) == (unsigned)opcode;
+}
+
+OP::OpCode OP::getOpCode(const llvm::Instruction *I) {
+  return (OP::OpCode)llvm::cast<llvm::ConstantInt>(I->getOperand(0))
+      ->getZExtValue();
 }
 
 OP::OpCode OP::GetDxilOpFuncCallInst(const llvm::Instruction *I) {
   DXASSERT(IsDxilOpFuncCallInst(I), "else caller didn't call IsDxilOpFuncCallInst to check");
-  return (OP::OpCode)llvm::cast<llvm::ConstantInt>(I->getOperand(0))->getZExtValue();
+  return getOpCode(I);
 }
 
 bool OP::IsDxilOpWave(OpCode C) {
@@ -1176,7 +1181,7 @@ void OP::UpdateCache(OpCodeClass opClass, Type * Ty, llvm::Function *F) {
 
 Function *OP::GetOpFunc(OpCode opCode, Type *pOverloadType) {
   DXASSERT(0 <= (unsigned)opCode && opCode < OpCode::NumOpCodes, "otherwise caller passed OOB OpCode");
-  _Analysis_assume_(0 <= (unsigned)opCode && opCode < OpCode::NumOpCodes);
+  assert(0 <= (unsigned)opCode && opCode < OpCode::NumOpCodes);
   DXASSERT(IsOverloadLegal(opCode, pOverloadType), "otherwise the caller requested illegal operation overload (eg HLSL function with unsupported types for mapped intrinsic function)");
   OpCodeClass opClass = m_OpCodeProps[(unsigned)opCode].opCodeClass;
   Function *&F = m_OpCodeClassCache[(unsigned)opClass].pOverloads[pOverloadType];
@@ -1677,7 +1682,7 @@ const SmallMapVector<llvm::Type *, llvm::Function *, 8> &
 OP::GetOpFuncList(OpCode opCode) const {
   DXASSERT(0 <= (unsigned)opCode && opCode < OpCode::NumOpCodes,
            "otherwise caller passed OOB OpCode");
-  _Analysis_assume_(0 <= (unsigned)opCode && opCode < OpCode::NumOpCodes);
+  assert(0 <= (unsigned)opCode && opCode < OpCode::NumOpCodes);
   return m_OpCodeClassCache[(unsigned)m_OpCodeProps[(unsigned)opCode]
                                 .opCodeClass]
       .pOverloads;
