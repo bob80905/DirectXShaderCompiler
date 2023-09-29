@@ -3454,9 +3454,10 @@ static void ValidateNodeInputRecord(Function *F, ValidationContext &ValCtx) {
         validInputs = "{RW}ThreadNodeInputRecord";
         break;
       }
-      ValCtx.EmitFnFormatError(F, ValidationRule::DeclNodeLaunchInputType,
-        { ShaderModel::GetNodeLaunchTypeName(props.Node.LaunchType),
-          F->getName(), validInputs });
+      ValCtx.EmitFnFormatError(
+          F, ValidationRule::DeclNodeLaunchInputType,
+          {ShaderModel::GetNodeLaunchTypeName(props.Node.LaunchType),
+           F->getName(), validInputs});
     }
   }
 }
@@ -3488,11 +3489,16 @@ static void ValidateFunction(Function &F, ValidationContext &ValCtx) {
           // Check compatibility when both compute and node are specified
           if (entryProps.props.IsNode()) {
             // Compute is only compatible with Broadcasting launch nodes
-            if (entryProps.props.Node.LaunchType != DXIL::NodeLaunchType::Broadcasting) {
-              ValCtx.EmitFnFormatError(&F, ValidationRule::FlowComputeNodeLaunchType,
-                { F.getName(), entryProps.props.Node.LaunchType == DXIL::NodeLaunchType::Coalescing ?
-                  ShaderModel::GetNodeLaunchTypeName(DXIL::NodeLaunchType::Coalescing) :
-                  ShaderModel::GetNodeLaunchTypeName(DXIL::NodeLaunchType::Thread)});
+            if (entryProps.props.Node.LaunchType !=
+                DXIL::NodeLaunchType::Broadcasting) {
+              ValCtx.EmitFnFormatError(
+                  &F, ValidationRule::FlowComputeNodeLaunchType,
+                  {F.getName(), entryProps.props.Node.LaunchType ==
+                                        DXIL::NodeLaunchType::Coalescing
+                                    ? ShaderModel::GetNodeLaunchTypeName(
+                                          DXIL::NodeLaunchType::Coalescing)
+                                    : ShaderModel::GetNodeLaunchTypeName(
+                                          DXIL::NodeLaunchType::Thread)});
               break;
             }
             // Compute is not compatible with node input (other than an input
