@@ -22,7 +22,7 @@ struct [NodeTrackRWInputSharing] TRACKED_RECORD
 // parameter types.
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeMaxDispatchGrid(8,1,1)]
 void node2_01([MaxRecords(5)] EmptyNodeOutput output)
@@ -32,7 +32,7 @@ void node2_01([MaxRecords(5)] EmptyNodeOutput output)
 }
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeMaxDispatchGrid(8,1,1)]
 void node2_02([MaxRecords(5)] EmptyNodeOutput output)
@@ -42,7 +42,7 @@ void node2_02([MaxRecords(5)] EmptyNodeOutput output)
 }
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeMaxDispatchGrid(8,1,1)]
 void node2_05(DispatchNodeInputRecord<RECORD> input)
@@ -57,7 +57,7 @@ struct FakeNodeOutput {
 };
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeMaxDispatchGrid(8,1,1)]
 void node2_06(FakeNodeOutput<RECORD> output)
@@ -70,7 +70,7 @@ void node2_06(FakeNodeOutput<RECORD> output)
 // Check invalid initialization of *NodeOutputRecords
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeMaxDispatchGrid(8,1,1)]
 void node3_01(NodeOutput<RECORD> output)
@@ -80,7 +80,7 @@ void node3_01(NodeOutput<RECORD> output)
 }
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeMaxDispatchGrid(8,1,1)]
 void node3_02(NodeOutput<RECORD> output)
@@ -90,7 +90,7 @@ void node3_02(NodeOutput<RECORD> output)
 }
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeMaxDispatchGrid(8,1,1)]
 void node3_03(NodeOutput<RECORD> output)
@@ -100,7 +100,7 @@ void node3_03(NodeOutput<RECORD> output)
 }
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeMaxDispatchGrid(8,1,1)]
 void node3_04(NodeOutput<RECORD> output)
@@ -109,13 +109,12 @@ void node3_04(NodeOutput<RECORD> output)
   GroupNodeOutputRecords<RECORD> outrec = output.GetThreadNodeOutputRecords(1); /* expected-error {{cannot initialize a variable of type 'GroupNodeOutputRecords<RECORD>' with an rvalue of type 'ThreadNodeOutputRecords<RECORD>'}} */
 }
 
-//==============================================================================
 // Check FinishedCrossGroupSharing only available for RWDispatchNodeInputRecord
 // in Broadcasting launch nodes
 
 [Shader("node")]
 [NumThreads(8,1,1)]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NodeDispatchGrid(8,1,1)]
 void node4_01(RWDispatchNodeInputRecord<TRACKED_RECORD> input) {
   input.FinishedCrossGroupSharing(); // no error 
@@ -123,7 +122,7 @@ void node4_01(RWDispatchNodeInputRecord<TRACKED_RECORD> input) {
 
 
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NumThreads(8,1,1)]
 [NodeDispatchGrid(8,1,1)]
 void node4_02(DispatchNodeInputRecord<RECORD> input) {
@@ -131,7 +130,7 @@ void node4_02(DispatchNodeInputRecord<RECORD> input) {
 }
 
 [Shader("node")]
-[NodeLaunch("Coalescing")]
+[NodeLaunch("coalescing")]
 [NumThreads(1024,1,1)]
 [NodeIsProgramEntry]
 void node4_03(GroupNodeInputRecords<RECORD> input)
@@ -140,7 +139,7 @@ void node4_03(GroupNodeInputRecords<RECORD> input)
 }
 
 [Shader("node")]
-[NodeLaunch("Coalescing")]
+[NodeLaunch("coalescing")]
 [NumThreads(1024,1,1)]
 [NodeIsProgramEntry]
 void node4_04(RWGroupNodeInputRecords<RECORD> input)
@@ -149,7 +148,7 @@ void node4_04(RWGroupNodeInputRecords<RECORD> input)
 }
 
 [Shader("node")]
-[NodeLaunch("Thread")]
+[NodeLaunch("thread")]
 [NodeIsProgramEntry]
 void node4_05(ThreadNodeInputRecord<RECORD> input)
 {
@@ -158,7 +157,7 @@ void node4_05(ThreadNodeInputRecord<RECORD> input)
 
 
 [Shader("node")]
-[NodeLaunch("Thread")]
+[NodeLaunch("thread")]
 [NodeIsProgramEntry]
 void node4_06(RWThreadNodeInputRecord<RECORD> input)
 {

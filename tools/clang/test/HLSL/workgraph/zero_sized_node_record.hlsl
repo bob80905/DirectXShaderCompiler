@@ -52,12 +52,14 @@ void node04(RWGroupNodeInputRecords<EMPTY> input) // expected-error {{record use
 
 [Shader("node")]
 [NodeLaunch("thread")]
+[NumThreads(1,1,1)]
 void node05(ThreadNodeInputRecord<EMPTY> input) // expected-error {{record used in ThreadNodeInputRecord may not have zero size}}
 {}
 
 [Shader("node")]
 [NodeLaunch("thread")]
 void node06(RWThreadNodeInputRecord<EMPTY2> input) // expected-error {{record used in RWThreadNodeInputRecord may not have zero size}}
+[NumThreads(1,1,1)]
 {}
 
 [Shader("node")]
