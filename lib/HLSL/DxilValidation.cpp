@@ -3442,7 +3442,7 @@ static void ValidateNodeInputRecord(Function *F, ValidationContext &ValCtx) {
       // if there was no input specified
       if (input.Flags.IsEmptyInput())
         continue;
-      LPCSTR validInputs = "";
+      llvm::StringRef validInputs = "";
       switch (props.Node.LaunchType) {
       case DXIL::NodeLaunchType::Broadcasting:
         validInputs = "{RW}DispatchNodeInputRecord";
