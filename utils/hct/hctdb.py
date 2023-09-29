@@ -287,10 +287,10 @@ class db_dxil(object):
             self.name_idx[i].category = "Dot"
         for i in "CreateHandle,CBufferLoad,CBufferLoadLegacy,TextureLoad,TextureStore,TextureStoreSample,BufferLoad,BufferStore,BufferUpdateCounter,CheckAccessFullyMapped,GetDimensions,RawBufferLoad,RawBufferStore".split(","):
             self.name_idx[i].category = "Resources"
-        for i in "Sample,SampleBias,SampleLevel,SampleGrad,SampleCmp,SampleCmpLevelZero,SampleCmpLevel,Texture2DMSGetSamplePosition,RenderTargetGetSamplePosition,RenderTargetGetSampleCount".split(","):
+        for i in "Sample,SampleBias,SampleLevel,SampleGrad,SampleCmp,SampleCmpLevelZero,SampleCmpLevel,SampleCmpBias,SampleCmpGrad,Texture2DMSGetSamplePosition,RenderTargetGetSamplePosition,RenderTargetGetSampleCount".split(","):
             self.name_idx[i].category = "Resources - sample"
-        for i in "Sample,SampleBias,SampleCmp".split(","):
-            self.name_idx[i].shader_stages = ("library", "pixel", "compute", "amplification", "mesh")
+        for i in "Sample,SampleBias,SampleCmp,SampleCmpBias".split(","):
+            self.name_idx[i].shader_stages = ("library", "pixel", "compute", "amplification", "mesh", "node")
         for i in "RenderTargetGetSamplePosition,RenderTargetGetSampleCount".split(","):
             self.name_idx[i].shader_stages = ("pixel",)
         for i in "TextureGather,TextureGatherCmp,TextureGatherRaw".split(","):
@@ -487,6 +487,9 @@ class db_dxil(object):
             self.name_idx[i].shader_model = 6,8
             self.name_idx[i].shader_stages = ("node",)
         for i in "BarrierByMemoryType,BarrierByMemoryHandle,BarrierByNodeRecordHandle".split(","): # included in Synchronization category
+            self.name_idx[i].shader_model = 6,8
+        for i in "SampleCmpBias,SampleCmpGrad".split(","):
+            self.name_idx[i].category = "Comparison Samples"
             self.name_idx[i].shader_model = 6,8
 
     def populate_llvm_instructions(self):
@@ -2138,6 +2141,47 @@ class db_dxil(object):
             db_dxil_param(0, "i32", "", "number of levels of recursion remaining")])
         next_op_idx += 1
 
+        # Comparison Sampling
+        self.add_dxil_op("SampleCmpGrad", next_op_idx, "SampleCmpGrad", "samples a texture using a gradient and compares a single component against the specified comparison value", "hf", "ro", [
+            db_dxil_param(0, "$r", "", "the result of the filtered comparisons"),
+            db_dxil_param(2, "res", "srv", "handle of SRV to sample"),
+            db_dxil_param(3, "res", "sampler", "handle of sampler to use"),
+            db_dxil_param(4, "f", "coord0", "coordinate"),
+            db_dxil_param(5, "f", "coord1", "coordinate, undef for Texture1D"),
+            db_dxil_param(6, "f", "coord2", "coordinate, undef for Texture1D, Texture1DArray or Texture2D"),
+            db_dxil_param(7, "f", "coord3", "coordinate, defined only for TextureCubeArray"),
+            db_dxil_param(8, "i32", "offset0", "optional offset, applicable to Texture1D, Texture1DArray, and as part of offset1"),
+            db_dxil_param(9, "i32", "offset1", "optional offset, applicable to Texture2D, Texture2DArray, and as part of offset2"),
+            db_dxil_param(10, "i32", "offset2", "optional offset, applicable to Texture3D"),
+            db_dxil_param(11, "f", "compareValue", "the value to compare with"),
+            db_dxil_param(12, "f", "ddx0", "rate of change of coordinate c0 in the x direction"),
+            db_dxil_param(13, "f", "ddx1", "rate of change of coordinate c1 in the x direction"),
+            db_dxil_param(14, "f", "ddx2", "rate of change of coordinate c2 in the x direction"),
+            db_dxil_param(15, "f", "ddy0", "rate of change of coordinate c0 in the y direction"),
+            db_dxil_param(16, "f", "ddy1", "rate of change of coordinate c1 in the y direction"),
+            db_dxil_param(17, "f", "ddy2", "rate of change of coordinate c2 in the y direction"),
+            db_dxil_param(18, "f", "clamp", "clamp value")],
+            counters=('tex_cmp',))
+        next_op_idx += 1
+
+        self.add_dxil_op("SampleCmpBias", next_op_idx, "SampleCmpBias", "samples a texture after applying the input bias to the mipmap level and compares a single component against the specified comparison value", "hf", "ro", [
+            db_dxil_param(0, "$r", "", "the result of the filtered comparisons"),
+            db_dxil_param(2, "res", "srv", "handle of SRV to sample"),
+            db_dxil_param(3, "res", "sampler", "handle of sampler to use"),
+            db_dxil_param(4, "f", "coord0", "coordinate"),
+            db_dxil_param(5, "f", "coord1", "coordinate, undef for Texture1D"),
+            db_dxil_param(6, "f", "coord2", "coordinate, undef for Texture1D, Texture1DArray or Texture2D"),
+            db_dxil_param(7, "f", "coord3", "coordinate, defined only for TextureCubeArray"),
+            db_dxil_param(8, "i32", "offset0", "optional offset, applicable to Texture1D, Texture1DArray, and as part of offset1"),
+            db_dxil_param(9, "i32", "offset1", "optional offset, applicable to Texture2D, Texture2DArray, and as part of offset2"),
+            db_dxil_param(10, "i32", "offset2", "optional offset, applicable to Texture3D"),
+            db_dxil_param(11, "f", "compareValue", "the value to compare with"),
+            db_dxil_param(12, "f", "bias", "bias value"),
+            db_dxil_param(13, "f", "clamp", "clamp value")],
+            counters=('tex_cmp',))
+        next_op_idx += 1
+
+
 
         # Set interesting properties.
         self.build_indices()
@@ -2342,6 +2386,8 @@ class db_dxil(object):
             {'n':'checkForDynamicIndexing','t':'bool','c':1}])
         add_pass('hlsl-dxil-debug-instrumentation', 'DxilDebugInstrumentation', 'HLSL DXIL debug instrumentation for PIX', [
             {'n':'UAVSize','t':'int','c':1},
+            {'n':'FirstInstruction','t':'int','c':1},
+            {'n':'LastInstruction','t':'int','c':1},
             {'n':'parameter0','t':'int','c':1},
             {'n':'parameter1','t':'int','c':1},
             {'n':'parameter2','t':'int','c':1}])
@@ -2411,6 +2457,7 @@ class db_dxil(object):
         add_pass('dxil-elim-vector', 'DxilEliminateVector', 'Dxil Eliminate Vectors', [])
         add_pass('dxil-rewrite-output-arg-debug-info', 'DxilRewriteOutputArgDebugInfo', 'Dxil Rewrite Output Arg Debug Info', [])
         add_pass('dxil-finalize-preserves', 'DxilFinalizePreserves', 'Dxil Finalize Preserves', [])
+        add_pass('dxil-reinsert-nops', 'DxilReinsertNops', 'Dxil Reinsert Nops', [])
         add_pass('dxil-insert-preserves', 'DxilInsertPreserves', 'Dxil Insert Noops', [
                 {'n':'AllowPreserves', 't':'bool', 'c':1},
             ])
@@ -3169,6 +3216,7 @@ class db_hlsl(object):
             "p32u8" : "LICOMPTYPE_UINT8_4PACKED",
             "any_int16or32": "LICOMPTYPE_ANY_INT16_OR_32",
             "sint16or32_only": "LICOMPTYPE_SINT16_OR_32_ONLY",
+            "any_sampler": "LICOMPTYPE_ANY_SAMPLER",
             "ByteAddressBuffer": "LICOMPTYPE_BYTEADDRESSBUFFER",
             "RWByteAddressBuffer": "LICOMPTYPE_RWBYTEADDRESSBUFFER",
             "WaveMatrixLeft": "LICOMPTYPE_WAVE_MATRIX_LEFT",
@@ -3339,8 +3387,24 @@ class db_hlsl(object):
                     base_type, rows, cols, template_list = do(m)
                     break
             else:
-                template_list = "LITEMPLATE_SCALAR"
-
+                type_vector_match = type_vector_re.match(type_name)
+                if type_vector_match:
+                    base_type = type_vector_match.group(1)
+                    cols = type_vector_match.group(2)
+                    template_list = "LITEMPLATE_VECTOR"
+                else:
+                    type_any_match = type_any_re.match(type_name)
+                    if type_any_match:
+                        base_type = type_any_match.group(1)
+                        rows = "r"
+                        cols = "c"
+                        template_list = "LITEMPLATE_ANY"
+                    else:
+                        base_type = type_name
+                        if base_type.startswith("sampler") or base_type.startswith("string") or base_type.startswith("Texture") or base_type.startswith("wave") or base_type.startswith("acceleration_struct") or base_type.startswith("ray_desc") or base_type.startswith("any_sampler"):
+                            template_list = "LITEMPLATE_OBJECT"
+                        else:
+                            template_list = "LITEMPLATE_SCALAR"
             assert base_type in self.base_types, "Unknown base type '%s' in '%s'" % (base_type, desc)
             component_list = self.base_types[base_type]
             rows = translate_rowcol(rows)

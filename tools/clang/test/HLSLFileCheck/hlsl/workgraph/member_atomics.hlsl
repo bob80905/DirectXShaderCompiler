@@ -1,4 +1,5 @@
 // RUN: %dxc -T lib_6_8 %s | FileCheck %s
+// RUN: %dxc -T lib_6_8 -Od %s | FileCheck %s
 // ==================================================================
 // Test using atomics on node record members for cmpxchg and binops
 // ==================================================================
@@ -13,7 +14,7 @@ struct RECORD
 [Shader("node")]
 [NumThreads(1024,1,1)]
 [NodeDispatchGrid(32,1,1)]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 void node01(RWDispatchNodeInputRecord<RECORD> input1)
 {
   // CHECK: getelementptr %struct.RECORD, %struct.RECORD addrspace(6)*
@@ -50,7 +51,7 @@ void node02([MaxRecords(4)]RWGroupNodeInputRecords<RECORD> input2)
 [Shader("node")]
 [NumThreads(1024,1,1)]
 [NodeDispatchGrid(32,1,1)]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 void node03(NodeOutput<RECORD> output3)
 {
   GroupNodeOutputRecords<RECORD> outrec = output3.GetGroupNodeOutputRecords(1);
@@ -69,7 +70,7 @@ void node03(NodeOutput<RECORD> output3)
 // CHECK: define void @node04
 [Shader("node")]
 [NumThreads(1024,1,1)]
-[NodeLaunch("Coalescing")]
+[NodeLaunch("coalescing")]
 void node04([MaxOutputRecords(5)] NodeOutput<RECORD> outputs4)
 {
    ThreadNodeOutputRecords<RECORD> outrec = outputs4.GetThreadNodeOutputRecords(1);

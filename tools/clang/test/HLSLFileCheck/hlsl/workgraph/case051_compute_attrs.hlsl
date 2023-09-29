@@ -1,6 +1,5 @@
 // RUN: %dxc -T lib_6_8 -default-linkage external %s | FileCheck %s
 // ==================================================================
-// CASE051
 // Compute shaders ignore graphnode attributes
 // ==================================================================
 
@@ -11,9 +10,8 @@
 // CHECK:   ret void
 // CHECK: }
 
-[Shader("compute")]
 [Shader("node")]
-[NodeLaunch("Broadcasting")]
+[NodeLaunch("broadcasting")]
 [NodeDispatchGrid(2,3,2)]
 [NumThreads(1,1,1)]
 [NodeIsProgramEntry]

@@ -181,7 +181,8 @@ void CollectReadsWritesAndCallsForPayload(const Stmt *S,
         Info.WritesPerField[Field].push_back(
             PayloadUse{S, Block, Access.Member});
       } else {
-        Info.ReadsPerField[Field].push_back(PayloadUse{S, Block, Access.Member});
+        Info.ReadsPerField[Field].push_back(
+            PayloadUse{S, Block, Access.Member});
       }
     } else if (Access.Call) {
       Info.PayloadAsCallArg.push_back(PayloadUse{S, Block});
@@ -213,13 +214,13 @@ void CollectTraceRayCalls(const Stmt *S, DxrShaderDiagnoseInfo &Info,
 
 // Find the last write to the payload field in the given block.
 PayloadUse GetLastWriteInBlock(CFGBlock &Block,
-                              ArrayRef<PayloadUse> PayloadWrites) {
+                               ArrayRef<PayloadUse> PayloadWrites) {
   PayloadUse LastWrite;
   for (auto &Element : Block) { // TODO: reverse iterate?
     if (Optional<CFGStmt> S = Element.getAs<CFGStmt>()) {
-      auto It =
-          std::find_if(PayloadWrites.begin(), PayloadWrites.end(),
-                       [&](const PayloadUse &V) { return V.S == S->getStmt(); });
+      auto It = std::find_if(
+          PayloadWrites.begin(), PayloadWrites.end(),
+          [&](const PayloadUse &V) { return V.S == S->getStmt(); });
       if (It != std::end(PayloadWrites)) {
         LastWrite = *It;
         LastWrite.Parent = &Block;
@@ -266,13 +267,13 @@ GetAllWritesReachingExit(CFG &ShaderCFG, ArrayRef<PayloadUse> PayloadWrites) {
 
 // Find the first read to the payload field in the given block.
 PayloadUse GetFirstReadInBlock(CFGBlock &Block,
-                              ArrayRef<PayloadUse> PayloadReads) {
+                               ArrayRef<PayloadUse> PayloadReads) {
   PayloadUse FirstRead;
   for (auto &Element : Block) {
     if (Optional<CFGStmt> S = Element.getAs<CFGStmt>()) {
-      auto It =
-          std::find_if(PayloadReads.begin(), PayloadReads.end(),
-                       [&](const PayloadUse &V) { return V.S == S->getStmt(); });
+      auto It = std::find_if(
+          PayloadReads.begin(), PayloadReads.end(),
+          [&](const PayloadUse &V) { return V.S == S->getStmt(); });
       if (It != std::end(PayloadReads)) {
         FirstRead = *It;
         FirstRead.Parent = &Block;
@@ -326,8 +327,8 @@ CXXRecordDecl *GetPayloadType(const VarDecl *Payload) {
   return nullptr;
 }
 
-std::vector<FieldDecl*> GetAllPayloadFields(RecordDecl* PayloadType) {
-  std::vector<FieldDecl*> PayloadFields;
+std::vector<FieldDecl *> GetAllPayloadFields(RecordDecl *PayloadType) {
+  std::vector<FieldDecl *> PayloadFields;
 
   for (FieldDecl *Field : PayloadType->fields()) {
     QualType FieldType = Field->getType();
@@ -335,7 +336,8 @@ std::vector<FieldDecl*> GetAllPayloadFields(RecordDecl* PayloadType) {
       // Skip nested payload types.
       if (FieldRecordDecl->hasAttr<HLSLRayPayloadAttr>()) {
         auto SubTypeFields = GetAllPayloadFields(FieldRecordDecl);
-        PayloadFields.insert(PayloadFields.end(), SubTypeFields.begin(), SubTypeFields.end());
+        PayloadFields.insert(PayloadFields.end(), SubTypeFields.begin(),
+                             SubTypeFields.end());
         continue;
       }
     }
@@ -387,7 +389,8 @@ void DiagnosePayloadWrites(Sema &S, CFG &ShaderCFG, DominatorTree &DT,
       auto Qualifier = GetPayloadQualifierForStage(MemField, Info.Stage);
       if (Qualifier != DXIL::PayloadAccessQualifier::Write &&
           Qualifier != DXIL::PayloadAccessQualifier::ReadWrite) {
-        S.Diag(Write.Member->getExprLoc(), diag::warn_hlsl_payload_access_write_loss)
+        S.Diag(Write.Member->getExprLoc(),
+               diag::warn_hlsl_payload_access_write_loss)
             << Field->getName() << GetStringForShaderStage(Info.Stage);
       }
     }
@@ -487,7 +490,8 @@ void DiagnosePayloadReads(Sema &S, CFG &ShaderCFG, DominatorTree &DT,
       auto Qualifier = GetPayloadQualifierForStage(MemField, Info.Stage);
       if (Qualifier != DXIL::PayloadAccessQualifier::Read &&
           Qualifier != DXIL::PayloadAccessQualifier::ReadWrite) {
-        S.Diag(Read.Member->getExprLoc(), diag::warn_hlsl_payload_access_undef_read)
+        S.Diag(Read.Member->getExprLoc(),
+               diag::warn_hlsl_payload_access_undef_read)
             << Field->getName() << GetStringForShaderStage(Info.Stage);
       }
     }
@@ -706,7 +710,7 @@ DiagnosePayloadAsFunctionArg(
   return WrittenFieldsInCalls;
 }
 
-// Collect all fields that cannot be accessed for the given shader stage. 
+// Collect all fields that cannot be accessed for the given shader stage.
 // This function recurses into nested payload types.
 void CollectNonAccessableFields(
     RecordDecl *PayloadType, DXIL::PayloadAccessShaderStage Stage,
@@ -768,23 +772,22 @@ void CollectAccessableFields(RecordDecl *PayloadType,
   }
 }
 
-void HandlePayloadInitializer(DxrShaderDiagnoseInfo& Info) {
-    const VarDecl* Payload = Info.Payload;
+void HandlePayloadInitializer(DxrShaderDiagnoseInfo &Info) {
+  const VarDecl *Payload = Info.Payload;
 
-    const Expr* Init = Payload->getInit(); 
+  const Expr *Init = Payload->getInit();
 
-    if (Init) {
-        // If the payload has an initializer, then handle all fields as 
-        // written. Sema will check that the initializer is correct.
-        // We can handle all fields as written.
+  if (Init) {
+    // If the payload has an initializer, then handle all fields as
+    // written. Sema will check that the initializer is correct.
+    // We can handle all fields as written.
 
-        RecordDecl* PayloadType = GetPayloadType(Info.Payload);
-        for (FieldDecl* Field : PayloadType->fields()) {
-            Info.WritesPerField[Field].push_back(PayloadUse{Init, nullptr, nullptr});
-        }
+    RecordDecl *PayloadType = GetPayloadType(Info.Payload);
+    for (FieldDecl *Field : PayloadType->fields()) {
+      Info.WritesPerField[Field].push_back(PayloadUse{Init, nullptr, nullptr});
     }
+  }
 }
-
 
 // Emit diagnostics for a TraceRay call.
 void DiagnoseTraceCall(Sema &S, const VarDecl *Payload,
@@ -991,9 +994,9 @@ DiagnosePayloadAccess(Sema &S, DxrShaderDiagnoseInfo &Info,
     // Add calls that write fields as writes to allow the diagnostics on reads
     // to check if a call that writes the field dominates the read.
 
-    for (auto& P : WrittenFieldsInCalls) {
-        for (const FieldDecl* Field : P.second) {
-            Info.WritesPerField[Field].push_back(P.first);
+    for (auto &P : WrittenFieldsInCalls) {
+      for (const FieldDecl *Field : P.second) {
+        Info.WritesPerField[Field].push_back(P.first);
       }
     }
 
@@ -1138,14 +1141,14 @@ void DiagnoseRaytracingPayloadAccess(clang::Sema &S,
   visitor.diagnose(TU);
 }
 
-void DiagnoseCallableEntry(Sema &S, FunctionDecl *FD, HLSLShaderAttr *Attr) {
+void DiagnoseCallableEntry(Sema &S, FunctionDecl *FD,
+                           llvm::StringRef StageName) {
   if (!FD->getReturnType()->isVoidType())
-    S.Diag(FD->getLocation(), diag::err_shader_must_return_void)
-      << Attr->getStage();
+    S.Diag(FD->getLocation(), diag::err_shader_must_return_void) << StageName;
 
   if (FD->getNumParams() != 1)
     S.Diag(FD->getLocation(), diag::err_raytracing_entry_param_count)
-        << Attr->getStage() << FD->getNumParams()
+        << StageName << FD->getNumParams()
         << /*Special message for callable.*/ 3;
   else {
     ParmVarDecl *Param = FD->getParamDecl(0);
@@ -1162,16 +1165,16 @@ void DiagnoseCallableEntry(Sema &S, FunctionDecl *FD, HLSLShaderAttr *Attr) {
   return;
 }
 
-void DiagnoseMissOrAnyHitEntry(Sema &S, FunctionDecl *FD, HLSLShaderAttr *Attr,
+void DiagnoseMissOrAnyHitEntry(Sema &S, FunctionDecl *FD,
+                               llvm::StringRef StageName,
                                DXIL::ShaderKind Stage) {
   if (!FD->getReturnType()->isVoidType())
-    S.Diag(FD->getLocation(), diag::err_shader_must_return_void)
-      << Attr->getStage();
+    S.Diag(FD->getLocation(), diag::err_shader_must_return_void) << StageName;
 
   unsigned ExpectedParams = Stage == DXIL::ShaderKind::Miss ? 1 : 2;
   if (ExpectedParams != FD->getNumParams()) {
     S.Diag(FD->getLocation(), diag::err_raytracing_entry_param_count)
-        << Attr->getStage() << FD->getNumParams() << ExpectedParams;
+        << StageName << FD->getNumParams() << ExpectedParams;
     return;
   }
   ParmVarDecl *Param = FD->getParamDecl(0);
@@ -1205,26 +1208,25 @@ void DiagnoseMissOrAnyHitEntry(Sema &S, FunctionDecl *FD, HLSLShaderAttr *Attr,
 }
 
 void DiagnoseRayGenerationOrIntersectionEntry(Sema &S, FunctionDecl *FD,
-                                              HLSLShaderAttr *Attr) {
+                                              llvm::StringRef StageName) {
   if (!FD->getReturnType()->isVoidType())
-    S.Diag(FD->getLocation(), diag::err_shader_must_return_void)
-      << Attr->getStage();
+    S.Diag(FD->getLocation(), diag::err_shader_must_return_void) << StageName;
   unsigned ExpectedParams = 0;
   if (ExpectedParams != FD->getNumParams())
     S.Diag(FD->getLocation(), diag::err_raytracing_entry_param_count)
-        << Attr->getStage() << FD->getNumParams() << ExpectedParams;
+        << StageName << FD->getNumParams() << ExpectedParams;
   return;
 }
 
-void DiagnoseClosestHitEntry(Sema &S, FunctionDecl *FD, HLSLShaderAttr *Attr) {
+void DiagnoseClosestHitEntry(Sema &S, FunctionDecl *FD,
+                             llvm::StringRef StageName) {
   if (!FD->getReturnType()->isVoidType())
-    S.Diag(FD->getLocation(), diag::err_shader_must_return_void)
-      << Attr->getStage();
+    S.Diag(FD->getLocation(), diag::err_shader_must_return_void) << StageName;
   unsigned ExpectedParams = 2;
 
   if (ExpectedParams != FD->getNumParams()) {
     S.Diag(FD->getLocation(), diag::err_raytracing_entry_param_count)
-        << Attr->getStage() << FD->getNumParams() << ExpectedParams;
+        << StageName << FD->getNumParams() << ExpectedParams;
   }
 
   if (FD->getNumParams() == 0)
@@ -1256,239 +1258,5 @@ void DiagnoseClosestHitEntry(Sema &S, FunctionDecl *FD, HLSLShaderAttr *Attr) {
     }
   }
   return;
-}
-
-static bool NodeInputIsCompatible(StringRef& typeName,
-                                  DXIL::NodeLaunchType launchType) {
-  return llvm::StringSwitch<bool>(typeName)
-         .Case("DispatchNodeInputRecord",
-               launchType == DXIL::NodeLaunchType::Broadcasting)
-         .Case("RWDispatchNodeInputRecord",
-               launchType == DXIL::NodeLaunchType::Broadcasting)
-         .Case("GroupNodeInputRecords",
-               launchType == DXIL::NodeLaunchType::Coalescing)
-         .Case("RWGroupNodeInputRecords",
-               launchType == DXIL::NodeLaunchType::Coalescing)
-         .Case("EmptyNodeInput",
-               launchType == DXIL::NodeLaunchType::Coalescing)
-         .Case("ThreadNodeInputRecord",
-               launchType == DXIL::NodeLaunchType::Thread)
-         .Case("RWThreadNodeInputRecord",
-               launchType == DXIL::NodeLaunchType::Thread)
-         .Default(false);
-}
-
-void DiagnoseNodeEntry(Sema &S, FunctionDecl *FD, HLSLShaderAttr *Attr) {
-
-  SourceLocation computeLoc = SourceLocation();
-  SourceLocation nodeLoc = SourceLocation();
-  SourceLocation nodeLaunchLoc = SourceLocation();
-  DXIL::NodeLaunchType nodeLaunchType = DXIL::NodeLaunchType::Invalid;
-  unsigned inputCount = 0;
-
-  // a function may be both compute and work-graph node
-  for (auto *pAttr : FD->specific_attrs<HLSLShaderAttr>()) {
-    DXIL::ShaderKind shaderKind = ShaderModel::KindFromFullName(pAttr->getStage());
-    if (shaderKind == DXIL::ShaderKind::Node) {
-      nodeLoc = pAttr->getLocation();
-    } else if (shaderKind == DXIL::ShaderKind::Compute) {
-      computeLoc = pAttr->getLocation();
-    }
-  }
-  // if this isn't a work-graph node we can quit now
-  if (!nodeLoc.isValid())
-    return;
-
-  // save NodeLaunch type for use later
-  if (auto nodeLaunchAttr = FD->getAttr<HLSLNodeLaunchAttr>()) {
-    nodeLaunchType =
-      ShaderModel::NodeLaunchTypeFromName(nodeLaunchAttr->getLaunchType());
-    nodeLaunchLoc = nodeLaunchAttr->getLocation();
-  } else {
-    nodeLaunchType = DXIL::NodeLaunchType::Broadcasting;
-    nodeLaunchLoc = SourceLocation();
-  }
-
-  // If this is both a compute shader and work-graph node, it may only have
-  // broadcasting launch mode
-  if (computeLoc.isValid() &&
-      nodeLaunchType != DXIL::NodeLaunchType::Broadcasting) {
-    S.Diags.Report(nodeLaunchLoc, diag::err_hlsl_compute_launch_compatibility)
-      << FD->getName() << ShaderModel::GetNodeLaunchTypeName(nodeLaunchType);
-    S.Diags.Report(computeLoc, diag::note_defined_here) << "compute";
-  }
-
-  // Check that if a Thread launch node has the NumThreads attribute the
-  // thread group size is (1,1,1)
-  if (nodeLaunchType == DXIL::NodeLaunchType::Thread) {
-    if (auto NumThreads = FD->getAttr<HLSLNumThreadsAttr>()) {
-      if (NumThreads->getX() != 1 || NumThreads->getY() != 1 ||
-          NumThreads->getZ() != 1) {
-        S.Diags.Report(NumThreads->getLocation(),
-                       diag::err_hlsl_wg_thread_launch_group_size)
-          << NumThreads->getRange();
-        // Only output the note if the source location is valid
-        if (nodeLaunchLoc.isValid())
-          S.Diags.Report(nodeLaunchLoc, diag::note_defined_here)
-              << "Launch type";
-      }
-    }
-  } else if (!FD->hasAttr<HLSLNumThreadsAttr>()) {
-    // All other launch types require the NumThreads attribute.
-    S.Diags.Report(FD->getLocation(), diag::err_hlsl_missing_node_attr)
-      << FD->getName() << ShaderModel::GetNodeLaunchTypeName(nodeLaunchType)
-      << "numthreads";
-  }
-
-  auto *nodeDG = FD->getAttr<HLSLNodeDispatchGridAttr>();
-  auto *nodeMDG = FD->getAttr<HLSLNodeMaxDispatchGridAttr>();
-  if (nodeLaunchType != DXIL::NodeLaunchType::Broadcasting) {
-    // NodeDispatchGrid is only valid for Broadcasting nodes
-    if (nodeDG) {
-      S.Diags.Report(nodeDG->getLocation(), diag::err_hlsl_launch_type_attr)
-        << nodeDG->getSpelling()
-        << ShaderModel::GetNodeLaunchTypeName(DXIL::NodeLaunchType::Broadcasting)
-        << nodeDG->getRange();
-      // Only output the note if the source location is valid
-      if (nodeLaunchLoc.isValid())
-          S.Diags.Report(nodeLaunchLoc, diag::note_defined_here)
-              << "Launch type";
-    }
-    // NodeMaxDispatchGrid is only valid for Broadcasting nodes
-    if (nodeMDG) {
-      S.Diags.Report(nodeMDG->getLocation(), diag::err_hlsl_launch_type_attr)
-        << nodeMDG->getSpelling()
-        << ShaderModel::GetNodeLaunchTypeName(DXIL::NodeLaunchType::Broadcasting)
-        << nodeMDG->getRange();
-      // Only output the note if the source location is valid
-      if (nodeLaunchLoc.isValid())
-          S.Diags.Report(nodeLaunchLoc, diag::note_defined_here)
-              << "Launch type";
-    }
-  } else {
-    // A Broadcasting node must have one of NodeDispatchGrid or
-    // NodeMaxDispatchGrid
-    if (!nodeMDG && ! nodeDG)
-      S.Diags.Report(FD->getLocation(),
-        diag::err_hlsl_missing_dispatchgrid_attr) << FD->getName();
-    // NodeDispatchGrid and NodeMaxDispatchGrid may not be used together
-    if (nodeMDG && nodeDG) {
-      S.Diags.Report(nodeMDG->getLocation(),
-                     diag::err_hlsl_incompatible_node_attr)
-        << FD->getName() << nodeMDG->getSpelling() << nodeDG->getSpelling()
-        << nodeMDG->getRange();
-      S.Diags.Report(nodeDG->getLocation(), diag::note_defined_here)
-        << nodeDG->getSpelling();
-    }
-  }
-
-  if (!FD->getReturnType()->isVoidType())
-    S.Diag(FD->getLocation(), diag::err_shader_must_return_void)
-      << Attr->getStage();
-
-  // Check parameter constraints
-  for (unsigned Idx = 0; Idx < FD->getNumParams(); ++Idx) {
-    ParmVarDecl *Param = FD->getParamDecl(Idx);
-
-    // compute is incompatible with node input/output
-    if (computeLoc.isValid() && hlsl::IsHLSLNodeType(Param->getType())) {
-      S.Diags.Report(Param->getLocation(),
-                     diag::err_hlsl_compute_io_compatibility)
-        << FD->getName() << "node input/output" << Param->getSourceRange();
-      S.Diags.Report(computeLoc, diag::note_defined_here) << "compute";
-    }
-
-    // Check any node input is compatible with the node launch type
-    if (hlsl::IsHLSLNodeInputType(Param->getType())) {
-      inputCount++;
-      const RecordType* RT = Param->getType()->getAs<RecordType>();
-      StringRef typeName = RT->getDecl()->getName();
-      if (nodeLaunchType != DXIL::NodeLaunchType::Invalid &&
-          !NodeInputIsCompatible(typeName, nodeLaunchType)) {
-        S.Diags.Report(Param->getLocation(), diag::err_hlsl_wg_input_kind)
-          << typeName << ShaderModel::GetNodeLaunchTypeName(nodeLaunchType)
-          << (static_cast<unsigned>(nodeLaunchType) - 1) << Param->getSourceRange();
-        if (nodeLaunchLoc.isValid())
-          S.Diags.Report(nodeLaunchLoc, diag::note_defined_here)
-            << "Launch type";
-      }
-      if (inputCount > 1)
-        S.Diags.Report(Param->getLocation(),
-                       diag::err_hlsl_too_many_node_inputs)
-          << FD->getName() << Param->getSourceRange();
-    }
-
-    HLSLMaxRecordsSharedWithAttr *ExistingMRSWA =
-        Param->getAttr<HLSLMaxRecordsSharedWithAttr>();
-    if (ExistingMRSWA) {
-      StringRef sharedName = ExistingMRSWA->getName()->getName();
-      unsigned int arg_idx = 0;
-      bool found = false;
-      while (arg_idx < FD->getNumParams()) {
-        const ParmVarDecl *parmDecl = FD->getParamDecl(arg_idx);
-        // validation that MRSW doesn't reference its own parameter is
-        // already done at
-        // SemaHLSL.cpp:ValidateMaxRecordsSharedWithAttributes so we don't
-        // need to check that arg_idx != Idx.
-        if (parmDecl->getName() == sharedName) {
-          // now we need to check that this parameter has an output record type.
-          hlsl::NodeFlags nodeFlags;
-          if (GetHLSLNodeIORecordType(parmDecl, nodeFlags)) {
-            hlsl::NodeIOProperties node(nodeFlags);
-            if (node.Flags.IsOutputNode()) {
-              found = true;
-              break;
-            }
-          }
-        }
-        arg_idx++;
-      }
-
-      if (!found) {
-        S.Diag(ExistingMRSWA->getLocation(),
-               diag::err_hlsl_maxrecordssharedwith_references_invalid_arg);
-      }
-    }
-  }
-  return;
-}
-
-void DiagnoseEntry(Sema &S, FunctionDecl *FD) {
-  auto Attr = FD->getAttr<HLSLShaderAttr>();
-  if (!Attr)
-    return;
-
-  DXIL::ShaderKind Stage = ShaderModel::KindFromFullName(Attr->getStage());
-  switch (Stage) {
-  case DXIL::ShaderKind::Pixel:
-  case DXIL::ShaderKind::Vertex:
-  case DXIL::ShaderKind::Geometry:
-  case DXIL::ShaderKind::Hull:
-  case DXIL::ShaderKind::Domain:
-  case DXIL::ShaderKind::Library:
-  case DXIL::ShaderKind::Mesh:
-  case DXIL::ShaderKind::Amplification:
-  case DXIL::ShaderKind::Invalid:
-    return;
-  case DXIL::ShaderKind::Callable: {
-    return DiagnoseCallableEntry(S, FD, Attr);
-  }
-  case DXIL::ShaderKind::Miss:
-  case DXIL::ShaderKind::AnyHit: {
-    return DiagnoseMissOrAnyHitEntry(S, FD, Attr, Stage);
-  }
-  case DXIL::ShaderKind::RayGeneration:
-  case DXIL::ShaderKind::Intersection: {
-    return DiagnoseRayGenerationOrIntersectionEntry(S, FD, Attr);
-  }
-  case DXIL::ShaderKind::ClosestHit: {
-    return DiagnoseClosestHitEntry(S, FD, Attr);
-  }
-  case DXIL::ShaderKind::Compute:
-  case DXIL::ShaderKind::Node: {
-    // A compute shader may also be a node, so we check it here
-    return DiagnoseNodeEntry(S, FD, Attr);
-  }
-  }
 }
 } // namespace hlsl

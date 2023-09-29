@@ -1,4 +1,5 @@
 // RUN: %dxc -T lib_6_8 %s | FileCheck %s
+// RUN: %dxc -T lib_6_8 -Od %s | FileCheck %s
 //
 // Verify that NodeOutput can be passed to a called function and used."
 
@@ -35,7 +36,8 @@ void loadStressWorker(
 [Shader("node")]
 [NodeMaxDispatchGrid(3, 1, 1)]
 [NumThreads(16, 1, 1)]
-void loadStress_16(    
+void loadStress_16(
+    DispatchNodeInputRecord<loadStressRecord> input,
     [MaxRecords(16)] NodeOutput<loadStressRecord> loadStressChild
 )
 {

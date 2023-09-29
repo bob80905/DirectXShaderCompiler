@@ -4987,8 +4987,8 @@ Sema::PerformObjectArgumentInitialization(Expr *From,
                                           NamedDecl *FoundDecl,
                                           CXXMethodDecl *Method) {
   QualType FromRecordType, DestType;
-  QualType ImplicitParamRecordType  =
-    Method->getThisType(Context)->getAs<PointerType>()->getPointeeType();
+  // HLSL Change - this is a reference.
+  QualType ImplicitParamRecordType = Method->getThisObjectType(Context);
 
   Expr::Classification FromClassification;
   if (const PointerType *PT = From->getType()->getAs<PointerType>()) {
@@ -9051,14 +9051,6 @@ static void DiagnoseBadConversion(Sema &S, OverloadCandidate *Cand,
       }
   }
 
-  // HLSL Change Starts
-  // With some intrinsics with templated parameters we can end up here
-  // with the To and From types being the same - we'll return early to
-  // avoid a weird diagnostic.
-  if (ToTy == FromTy)
-    return;
-  // HLSL Change Ends
-  
   // Emit the generic diagnostic and, optionally, add the hints to it.
   PartialDiagnostic FDiag = S.PDiag(diag::note_ovl_candidate_bad_conv);
   FDiag << (unsigned) FnKind << FnDesc

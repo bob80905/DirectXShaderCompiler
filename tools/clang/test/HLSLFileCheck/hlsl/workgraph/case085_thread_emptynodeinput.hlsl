@@ -1,13 +1,13 @@
 // RUN: %dxc -T lib_6_8 %s | FileCheck %s
+// RUN: %dxc -T lib_6_8 -Od %s | FileCheck %s
 // ==================================================================
-// CASE085
 // Thread launch node declares EmptyNodeInput<1>
 // ==================================================================
 
 RWBuffer<uint> buf0;
 
 [Shader("node")]
-[NodeLaunch("Coalescing")]
+[NodeLaunch("coalescing")]
 [NodeIsProgramEntry]
 [NumThreads(2,1,1)]
 void node085_thread_emptynodeinput(EmptyNodeInput input)
@@ -18,7 +18,7 @@ void node085_thread_emptynodeinput(EmptyNodeInput input)
 }
 
 // CHECK: define void @node085_thread_emptynodeinput() {
-// CHECK: [[LOAD:%[0-9]+]] = load %dx.types.Handle, %dx.types.Handle* @"\01?buf0@@3V?$RWBuffer@I@@A", align 4
+// CHECK: [[LOAD:%[0-9]+]] = load %dx.types.Handle, %dx.types.Handle* @"\01?buf0@@3V?$RWBuffer@I@@A"
 // CHECK: [[HANDLE:%[0-9]+]] = call %dx.types.NodeRecordHandle @dx.op.createNodeInputRecordHandle(i32 {{[0-9]+}}, i32 0)  ; CreateNodeInputRecordHandle(MetadataIdx)
 // CHECK: [[ANN_HANDLE:%[0-9]+]] = call %dx.types.NodeRecordHandle @dx.op.annotateNodeRecordHandle(i32 {{[0-9]+}}, %dx.types.NodeRecordHandle [[HANDLE]], %dx.types.NodeRecordInfo { i32 9, i32 0 })
 // CHECK: [[COUNT:%[0-9]+]] = call i32 @dx.op.getInputRecordCount(i32 {{[0-9]+}}, %dx.types.NodeRecordHandle [[ANN_HANDLE]])  ; GetInputRecordCount(input)
@@ -34,7 +34,7 @@ void node085_thread_emptynodeinput(EmptyNodeInput input)
 // Arg #1: ShaderKind Tag (8)
 // Arg #2: Node (15)
 // Arg #3: NodeLaunch Tag (13)
-// Arg #2: Coalescing (2)
+// Arg #2: coalescing (2)
 // ...
 // Arg #n: NodeInputs Tag (20)
 // Arg #n+1: NodeInputs (metadata)

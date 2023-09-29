@@ -984,6 +984,117 @@ def HLSLNodeTrackRWInputSharing : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def HLSLNodeObject : InheritableAttr {
+  let Spellings = []; // No spellings!
+  let Subjects = SubjectList<[CXXRecord]>;
+  let Documentation = [Undocumented];
+
+  let Args = [EnumArgument<"Type", "RecordType",
+                           ["DispatchNodeInputRecord",
+                           "RWDispatchNodeInputRecord",
+                           "GroupNodeInputRecords",
+                           "RWGroupNodeInputRecords",
+                           "ThreadNodeInputRecord",
+                           "RWThreadNodeInputRecord",
+                           "EmptyNodeInput",
+                           "NodeOutput",
+                           "EmptyNodeOutput",
+                           "NodeOutputArray",
+                           "EmptyNodeOutputArray",
+                           "GroupNodeOutputRecords",
+                           "ThreadNodeOutputRecords"],
+                           ["DispatchNodeInputRecord",
+                           "RWDispatchNodeInputRecord",
+                           "GroupNodeInputRecords",
+                           "RWGroupNodeInputRecords",
+                           "ThreadNodeInputRecord",
+                           "RWThreadNodeInputRecord",
+                           "EmptyNodeInput",
+                           "NodeOutput",
+                           "EmptyNodeOutput",
+                           "NodeOutputArray",
+                           "EmptyNodeOutputArray",
+                           "GroupNodeOutputRecords",
+                           "ThreadNodeOutputRecords"]>];
+
+  let AdditionalMembers =
+  [{hlsl::DXIL::NodeIOKind getNodeIOType() const {
+      switch (type) {
+      case DispatchNodeInputRecord:
+        return hlsl::DXIL::NodeIOKind::DispatchNodeInputRecord;
+      case RWDispatchNodeInputRecord:
+        return hlsl::DXIL::NodeIOKind::RWDispatchNodeInputRecord;
+      case GroupNodeInputRecords:
+        return hlsl::DXIL::NodeIOKind::GroupNodeInputRecords;
+      case RWGroupNodeInputRecords:
+        return hlsl::DXIL::NodeIOKind::RWGroupNodeInputRecords;
+      case ThreadNodeInputRecord:
+        return hlsl::DXIL::NodeIOKind::ThreadNodeInputRecord;
+      case RWThreadNodeInputRecord:
+        return hlsl::DXIL::NodeIOKind::RWThreadNodeInputRecord;
+      case EmptyNodeInput:
+        return hlsl::DXIL::NodeIOKind::EmptyInput;
+      case NodeOutput:
+        return hlsl::DXIL::NodeIOKind::NodeOutput;
+      case EmptyNodeOutput:
+        return hlsl::DXIL::NodeIOKind::EmptyOutput;
+      case NodeOutputArray:
+        return hlsl::DXIL::NodeIOKind::NodeOutputArray;
+      case EmptyNodeOutputArray:
+        return hlsl::DXIL::NodeIOKind::EmptyOutputArray;
+      case GroupNodeOutputRecords:
+        return hlsl::DXIL::NodeIOKind::GroupNodeOutputRecords;
+      case ThreadNodeOutputRecords:
+        return hlsl::DXIL::NodeIOKind::ThreadNodeOutputRecords;
+      }
+      llvm_unreachable("all cases exhausted");
+      return hlsl::DXIL::NodeIOKind::Invalid;
+    }
+
+    static RecordType toAttrType(hlsl::DXIL::NodeIOKind Type) {
+      switch (Type) {
+      case hlsl::DXIL::NodeIOKind::DispatchNodeInputRecord:
+        return DispatchNodeInputRecord;
+      case hlsl::DXIL::NodeIOKind::RWDispatchNodeInputRecord:
+        return RWDispatchNodeInputRecord;
+      case hlsl::DXIL::NodeIOKind::GroupNodeInputRecords:
+        return GroupNodeInputRecords;
+      case hlsl::DXIL::NodeIOKind::RWGroupNodeInputRecords:
+        return RWGroupNodeInputRecords;
+      case hlsl::DXIL::NodeIOKind::ThreadNodeInputRecord:
+        return ThreadNodeInputRecord;
+      case hlsl::DXIL::NodeIOKind::RWThreadNodeInputRecord:
+        return RWThreadNodeInputRecord;
+      case hlsl::DXIL::NodeIOKind::EmptyInput:
+        return EmptyNodeInput;
+      case hlsl::DXIL::NodeIOKind::NodeOutput:
+        return NodeOutput;
+      case hlsl::DXIL::NodeIOKind::EmptyOutput:
+        return EmptyNodeOutput;
+      case hlsl::DXIL::NodeIOKind::NodeOutputArray:
+        return NodeOutputArray;
+      case hlsl::DXIL::NodeIOKind::EmptyOutputArray:
+        return EmptyNodeOutputArray;
+      case hlsl::DXIL::NodeIOKind::GroupNodeOutputRecords:
+        return GroupNodeOutputRecords;
+      case hlsl::DXIL::NodeIOKind::ThreadNodeOutputRecords:
+        return ThreadNodeOutputRecords;
+      }
+      llvm_unreachable("all cases exhausted");
+    }
+
+    static HLSLNodeObjectAttr *CreateImplicit(ASTContext &Ctx,
+                                              hlsl::DXIL::NodeIOKind Type,
+                                              SourceRange Loc = SourceRange()) {
+      return CreateImplicit(Ctx, toAttrType(Type), Loc);
+    }
+
+    static const char *ConvertRecordTypeToStr(hlsl::DXIL::NodeIOKind Type) {
+      return ConvertRecordTypeToStr(toAttrType(Type));
+    }
+    }];
+}
+
 
 // HLSL Parameter Attributes
 
@@ -1023,6 +1134,19 @@ def CounterStructuredBuffer : SubsetSubject<
       (S->getType()->getAs<RecordType>()->getDecl()->getName() == "RWStructuredBuffer" ||
        S->getType()->getAs<RecordType>()->getDecl()->getName() == "AppendStructuredBuffer" ||
        S->getType()->getAs<RecordType>()->getDecl()->getName() == "ConsumeStructuredBuffer")}]>;
+
+// Array of StructuredBuffer types that can have associated counters 
+def ArrayOfCounterStructuredBuffer
+    : SubsetSubject<
+          Var, [{S->hasGlobalStorage() && S->getType()->getAsArrayTypeUnsafe() &&
+                 S->getType()->getAsArrayTypeUnsafe()->getElementType()->getAs<RecordType>() &&
+                 S->getType()->getAsArrayTypeUnsafe()->getElementType()->getAs<RecordType>()->getDecl() &&
+                  (S->getType()->getAsArrayTypeUnsafe()->getElementType()->getAs<RecordType>()->getDecl()->getName() ==
+                      "RWStructuredBuffer" ||
+                  S->getType()->getAsArrayTypeUnsafe()->getElementType()->getAs<RecordType>()->getDecl()->getName() ==
+                      "AppendStructuredBuffer" ||
+                  S->getType()->getAsArrayTypeUnsafe()->getElementType()->getAs<RecordType>()->getDecl()->getName() ==
+                      "ConsumeStructuredBuffer")}]>;
 
 // Global variable with "ConstantBuffer" type
 def ConstantBuffer
@@ -1148,7 +1272,7 @@ def VKCapabilityExt : InheritableAttr {
 
 def VKCounterBinding : InheritableAttr {
   let Spellings = [CXX11<"vk", "counter_binding">];
-  let Subjects = SubjectList<[CounterStructuredBuffer], ErrorDiag, "ExpectedCounterStructuredBuffer">;
+  let Subjects = SubjectList<[ArrayOfCounterStructuredBuffer, CounterStructuredBuffer], ErrorDiag, "ExpectedCounterStructuredBuffer">;
   let Args = [IntArgument<"Binding">];
   let LangOpts = [SPIRV];
   let Documentation = [Undocumented];
