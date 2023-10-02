@@ -58,8 +58,8 @@ void node05(ThreadNodeInputRecord<EMPTY> input) // expected-error {{record used 
 
 [Shader("node")]
 [NodeLaunch("thread")]
-void node06(RWThreadNodeInputRecord<EMPTY2> input) // expected-error {{record used in RWThreadNodeInputRecord may not have zero size}}
 [NumThreads(1,1,1)]
+void node06(RWThreadNodeInputRecord<EMPTY2> input) // expected-error {{record used in RWThreadNodeInputRecord may not have zero size}}
 {}
 
 [Shader("node")]

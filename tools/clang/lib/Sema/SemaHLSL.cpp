@@ -11348,4238 +11348,4208 @@ bool hlsl::DiagnoseNodeStructArgument(Sema *self, TemplateArgumentLoc ArgLoc,
   default:
     DXASSERT(false, "unreachable");
     return false;
+  }
+}
 
-    // This function diagnoses whether or not all entry-point attributes
-    // should exist on this shader stage
-    void DiagnoseEntryAttrAllowedOnStage(clang::Sema * self,
-                                         FunctionDecl * entryPointDecl,
-                                         DXIL::ShaderKind shaderKind) {
+  // This function diagnoses whether or not all entry-point attributes
+  // should exist on this shader stage
+  void DiagnoseEntryAttrAllowedOnStage(clang::Sema * self,
+                                       FunctionDecl * entryPointDecl,
+                                       DXIL::ShaderKind shaderKind) {
 
-      if (entryPointDecl->hasAttrs()) {
-        for (Attr *pAttr : entryPointDecl->getAttrs()) {
-          switch (pAttr->getKind()) {
+    if (entryPointDecl->hasAttrs()) {
+      for (Attr *pAttr : entryPointDecl->getAttrs()) {
+        switch (pAttr->getKind()) {
 
-          case clang::attr::HLSLWaveSize: {
-            switch (shaderKind) {
-            case DXIL::ShaderKind::Compute:
-            case DXIL::ShaderKind::Node:
-              break;
-            default:
-              self->Diag(pAttr->getRange().getBegin(),
-                         diag::err_hlsl_attribute_unsupported_stage)
-                  << "WaveSize"
-                  << "compute or node";
-              break;
-            }
+        case clang::attr::HLSLWaveSize: {
+          switch (shaderKind) {
+          case DXIL::ShaderKind::Compute:
+          case DXIL::ShaderKind::Node:
+            break;
+          default:
+            self->Diag(pAttr->getRange().getBegin(),
+                       diag::err_hlsl_attribute_unsupported_stage)
+                << "WaveSize"
+                << "compute or node";
+            break;
           }
-          }
+        }
         }
       }
     }
+  }
 
-    void hlsl::DiagnoseTranslationUnit(clang::Sema * self) {
-      DXASSERT_NOMSG(self != nullptr);
+  void hlsl::DiagnoseTranslationUnit(clang::Sema * self) {
+    DXASSERT_NOMSG(self != nullptr);
 
-      // Don't bother with global validation if compilation has already failed.
-      if (self->getDiagnostics().hasErrorOccurred()) {
+    // Don't bother with global validation if compilation has already failed.
+    if (self->getDiagnostics().hasErrorOccurred()) {
+      return;
+    }
+
+    // Check RT shader if available for their payload use and match payload
+    // access against availiable payload modifiers. We have to do it late
+    // because we could have payload access in a called function and have to
+    // check the callgraph if the root shader has the right access rights to
+    // the payload structure.
+    if (self->getLangOpts().IsHLSLLibrary) {
+      if (self->getLangOpts().EnablePayloadAccessQualifiers) {
+        ASTContext &ctx = self->getASTContext();
+        TranslationUnitDecl *TU = ctx.getTranslationUnitDecl();
+        DiagnoseRaytracingPayloadAccess(*self, TU);
+      }
+    }
+
+    // Don't check entry function for library.
+    if (self->getLangOpts().IsHLSLLibrary) {
+      // TODO: validate no recursion start from every function.
+      return;
+    }
+
+    // TODO: make these error 'real' errors rather than on-the-fly things
+    // Validate that the entry point is available.
+    DiagnosticsEngine &Diags = self->getDiagnostics();
+    FunctionDecl *pEntryPointDecl = nullptr;
+    FunctionDecl *pPatchFnDecl = nullptr;
+    const std::string &EntryPointName = self->getLangOpts().HLSLEntryFunction;
+    if (!EntryPointName.empty()) {
+      NameLookup NL = GetSingleFunctionDeclByName(self, EntryPointName,
+                                                  /*checkPatch*/ false);
+      if (NL.Found && NL.Other) {
+        // NOTE: currently we cannot hit this codepath when CodeGen is
+        // enabled, because CodeGenModule::getMangledName will mangle the
+        // entry point name into the bare string, and so ambiguous points will
+        // produce an error earlier on.
+        unsigned id =
+            Diags.getCustomDiagID(clang::DiagnosticsEngine::Level::Error,
+                                  "ambiguous entry point function");
+        Diags.Report(NL.Found->getSourceRange().getBegin(), id);
+        Diags.Report(NL.Other->getLocation(), diag::note_previous_definition);
         return;
       }
-
-      // Check RT shader if available for their payload use and match payload
-      // access against availiable payload modifiers. We have to do it late
-      // because we could have payload access in a called function and have to
-      // check the callgraph if the root shader has the right access rights to
-      // the payload structure.
-      if (self->getLangOpts().IsHLSLLibrary) {
-        if (self->getLangOpts().EnablePayloadAccessQualifiers) {
-          ASTContext &ctx = self->getASTContext();
-          TranslationUnitDecl *TU = ctx.getTranslationUnitDecl();
-          DiagnoseRaytracingPayloadAccess(*self, TU);
-        }
-      }
-
-      // Don't check entry function for library.
-      if (self->getLangOpts().IsHLSLLibrary) {
-        // TODO: validate no recursion start from every function.
+      pEntryPointDecl = NL.Found;
+      if (!pEntryPointDecl || !pEntryPointDecl->hasBody()) {
+        unsigned id =
+            Diags.getCustomDiagID(clang::DiagnosticsEngine::Level::Error,
+                                  "missing entry point definition");
+        Diags.Report(id);
         return;
       }
+    }
 
-      // TODO: make these error 'real' errors rather than on-the-fly things
-      // Validate that the entry point is available.
-      DiagnosticsEngine &Diags = self->getDiagnostics();
-      FunctionDecl *pEntryPointDecl = nullptr;
-      FunctionDecl *pPatchFnDecl = nullptr;
-      const std::string &EntryPointName = self->getLangOpts().HLSLEntryFunction;
-      if (!EntryPointName.empty()) {
-        NameLookup NL = GetSingleFunctionDeclByName(self, EntryPointName,
-                                                    /*checkPatch*/ false);
-        if (NL.Found && NL.Other) {
-          // NOTE: currently we cannot hit this codepath when CodeGen is
-          // enabled, because CodeGenModule::getMangledName will mangle the
-          // entry point name into the bare string, and so ambiguous points will
-          // produce an error earlier on.
-          unsigned id =
-              Diags.getCustomDiagID(clang::DiagnosticsEngine::Level::Error,
-                                    "ambiguous entry point function");
-          Diags.Report(NL.Found->getSourceRange().getBegin(), id);
-          Diags.Report(NL.Other->getLocation(), diag::note_previous_definition);
+    // Validate that there is no recursion; start with the entry function.
+    // NOTE: the information gathered here could be used to bypass code
+    // generation on functions that are unreachable (as an early form of dead
+    // code elimination).
+    if (pEntryPointDecl) {
+      const auto *shaderModel =
+          hlsl::ShaderModel::GetByName(self->getLangOpts().HLSLProfile.c_str());
+
+      if (shaderModel->IsGS()) {
+        // Validate that GS has the maxvertexcount attribute
+        if (!pEntryPointDecl->hasAttr<HLSLMaxVertexCountAttr>()) {
+          self->Diag(pEntryPointDecl->getLocation(),
+                     diag::err_hlsl_missing_attr)
+              << "GS"
+              << "maxvertexcount";
           return;
         }
-        pEntryPointDecl = NL.Found;
-        if (!pEntryPointDecl || !pEntryPointDecl->hasBody()) {
-          unsigned id =
-              Diags.getCustomDiagID(clang::DiagnosticsEngine::Level::Error,
-                                    "missing entry point definition");
-          Diags.Report(id);
+      } else if (shaderModel->IsHS()) {
+        if (const HLSLPatchConstantFuncAttr *Attr =
+                pEntryPointDecl->getAttr<HLSLPatchConstantFuncAttr>()) {
+          NameLookup NL = GetSingleFunctionDeclByName(
+              self, Attr->getFunctionName(), /*checkPatch*/ true);
+          if (!NL.Found || !NL.Found->hasBody()) {
+            unsigned id =
+                Diags.getCustomDiagID(clang::DiagnosticsEngine::Level::Error,
+                                      "missing patch function definition");
+            Diags.Report(id);
+            return;
+          }
+          pPatchFnDecl = NL.Found;
+        } else {
+          self->Diag(pEntryPointDecl->getLocation(),
+                     diag::err_hlsl_missing_attr)
+              << "HS"
+              << "patchconstantfunc";
+          return;
+        }
+      } else if (shaderModel->IsMS()) {
+        // Validate that MS has the numthreads attribute
+        if (!pEntryPointDecl->hasAttr<HLSLNumThreadsAttr>()) {
+          self->Diag(pEntryPointDecl->getLocation(),
+                     diag::err_hlsl_missing_attr)
+              << "MS"
+              << "numthreads";
+          return;
+        }
+        // Validate that MS has the outputtopology attribute
+        if (!pEntryPointDecl->hasAttr<HLSLOutputTopologyAttr>()) {
+          self->Diag(pEntryPointDecl->getLocation(),
+                     diag::err_hlsl_missing_attr)
+              << "MS"
+              << "outputtopology";
+          return;
+        }
+      } else if (shaderModel->IsAS()) {
+        // Validate that AS has the numthreads attribute
+        if (!pEntryPointDecl->hasAttr<HLSLNumThreadsAttr>()) {
+          self->Diag(pEntryPointDecl->getLocation(),
+                     diag::err_hlsl_missing_attr)
+              << "AS"
+              << "numthreads";
           return;
         }
       }
 
-      // Validate that there is no recursion; start with the entry function.
-      // NOTE: the information gathered here could be used to bypass code
-      // generation on functions that are unreachable (as an early form of dead
-      // code elimination).
-      if (pEntryPointDecl) {
-        const auto *shaderModel = hlsl::ShaderModel::GetByName(
-            self->getLangOpts().HLSLProfile.c_str());
-
-        if (shaderModel->IsGS()) {
-          // Validate that GS has the maxvertexcount attribute
-          if (!pEntryPointDecl->hasAttr<HLSLMaxVertexCountAttr>()) {
-            self->Diag(pEntryPointDecl->getLocation(),
-                       diag::err_hlsl_missing_attr)
-                << "GS"
-                << "maxvertexcount";
-            return;
-          }
-        } else if (shaderModel->IsHS()) {
-          if (const HLSLPatchConstantFuncAttr *Attr =
-                  pEntryPointDecl->getAttr<HLSLPatchConstantFuncAttr>()) {
-            NameLookup NL = GetSingleFunctionDeclByName(
-                self, Attr->getFunctionName(), /*checkPatch*/ true);
-            if (!NL.Found || !NL.Found->hasBody()) {
-              unsigned id =
-                  Diags.getCustomDiagID(clang::DiagnosticsEngine::Level::Error,
-                                        "missing patch function definition");
-              Diags.Report(id);
-              return;
-            }
-            pPatchFnDecl = NL.Found;
-          } else {
-            self->Diag(pEntryPointDecl->getLocation(),
-                       diag::err_hlsl_missing_attr)
-                << "HS"
-                << "patchconstantfunc";
-            return;
-          }
-        } else if (shaderModel->IsMS()) {
-          // Validate that MS has the numthreads attribute
-          if (!pEntryPointDecl->hasAttr<HLSLNumThreadsAttr>()) {
-            self->Diag(pEntryPointDecl->getLocation(),
-                       diag::err_hlsl_missing_attr)
-                << "MS"
-                << "numthreads";
-            return;
-          }
-          // Validate that MS has the outputtopology attribute
-          if (!pEntryPointDecl->hasAttr<HLSLOutputTopologyAttr>()) {
-            self->Diag(pEntryPointDecl->getLocation(),
-                       diag::err_hlsl_missing_attr)
-                << "MS"
-                << "outputtopology";
-            return;
-          }
-        } else if (shaderModel->IsAS()) {
-          // Validate that AS has the numthreads attribute
-          if (!pEntryPointDecl->hasAttr<HLSLNumThreadsAttr>()) {
-            self->Diag(pEntryPointDecl->getLocation(),
-                       diag::err_hlsl_missing_attr)
-                << "AS"
-                << "numthreads";
-            return;
-          }
-        }
-
-        hlsl::CallGraphWithRecurseGuard CG;
-        CG.BuildForEntry(pEntryPointDecl);
-        Decl *pResult = CG.CheckRecursion(pEntryPointDecl);
-        if (pResult) {
-          unsigned id =
-              Diags.getCustomDiagID(clang::DiagnosticsEngine::Level::Error,
-                                    "recursive functions not allowed");
-          Diags.Report(pResult->getSourceRange().getBegin(), id);
-        }
+      hlsl::CallGraphWithRecurseGuard CG;
+      CG.BuildForEntry(pEntryPointDecl);
+      Decl *pResult = CG.CheckRecursion(pEntryPointDecl);
+      if (pResult) {
+        unsigned id =
+            Diags.getCustomDiagID(clang::DiagnosticsEngine::Level::Error,
+                                  "recursive functions not allowed");
+        Diags.Report(pResult->getSourceRange().getBegin(), id);
+      }
+      if (pPatchFnDecl) {
+        CG.BuildForEntry(pPatchFnDecl);
+        Decl *pPatchFnDecl = CG.CheckRecursion(pEntryPointDecl);
         if (pPatchFnDecl) {
-          CG.BuildForEntry(pPatchFnDecl);
-          Decl *pPatchFnDecl = CG.CheckRecursion(pEntryPointDecl);
-          if (pPatchFnDecl) {
-            unsigned id = Diags.getCustomDiagID(
-                clang::DiagnosticsEngine::Level::Error,
-                "recursive functions not allowed (via patch function)");
-            Diags.Report(pPatchFnDecl->getSourceRange().getBegin(), id);
-          }
+          unsigned id = Diags.getCustomDiagID(
+              clang::DiagnosticsEngine::Level::Error,
+              "recursive functions not allowed (via patch function)");
+          Diags.Report(pPatchFnDecl->getSourceRange().getBegin(), id);
         }
       }
     }
+  }
 
-    void hlsl::DiagnosePayloadAccessQualifierAnnotations(
-        Sema & S, Declarator & D, const QualType &T,
-        const std::vector<hlsl::UnusualAnnotation *> &annotations) {
+  void hlsl::DiagnosePayloadAccessQualifierAnnotations(
+      Sema & S, Declarator & D, const QualType &T,
+      const std::vector<hlsl::UnusualAnnotation *> &annotations) {
 
-      auto &&iter = annotations.begin();
-      auto &&end = annotations.end();
+    auto &&iter = annotations.begin();
+    auto &&end = annotations.end();
 
-      hlsl::PayloadAccessAnnotation *readAnnotation = nullptr;
-      hlsl::PayloadAccessAnnotation *writeAnnotation = nullptr;
+    hlsl::PayloadAccessAnnotation *readAnnotation = nullptr;
+    hlsl::PayloadAccessAnnotation *writeAnnotation = nullptr;
 
-      for (; iter != end; ++iter) {
-        switch ((*iter)->getKind()) {
-        case hlsl::UnusualAnnotation::UA_PayloadAccessQualifier: {
-          hlsl::PayloadAccessAnnotation *annotation =
-              cast<hlsl::PayloadAccessAnnotation>(*iter);
-          if (annotation->qualifier == DXIL::PayloadAccessQualifier::Read) {
-            if (!readAnnotation)
-              readAnnotation = annotation;
-            else {
-              S.Diag(annotation->Loc,
-                     diag::err_hlsl_payload_access_qualifier_multiple_defined)
-                  << "read";
-              return;
-            }
-          } else if (annotation->qualifier ==
-                     DXIL::PayloadAccessQualifier::Write) {
-            if (!writeAnnotation)
-              writeAnnotation = annotation;
-            else {
-              S.Diag(annotation->Loc,
-                     diag::err_hlsl_payload_access_qualifier_multiple_defined)
-                  << "write";
-              return;
-            }
+    for (; iter != end; ++iter) {
+      switch ((*iter)->getKind()) {
+      case hlsl::UnusualAnnotation::UA_PayloadAccessQualifier: {
+        hlsl::PayloadAccessAnnotation *annotation =
+            cast<hlsl::PayloadAccessAnnotation>(*iter);
+        if (annotation->qualifier == DXIL::PayloadAccessQualifier::Read) {
+          if (!readAnnotation)
+            readAnnotation = annotation;
+          else {
+            S.Diag(annotation->Loc,
+                   diag::err_hlsl_payload_access_qualifier_multiple_defined)
+                << "read";
+            return;
           }
-
-          break;
-        }
-        default:
-          // Ignore all other annotations here.
-          break;
-        }
-      }
-
-      struct PayloadAccessQualifierInformation {
-        bool anyhit = false;
-        bool closesthit = false;
-        bool miss = false;
-        bool caller = false;
-      } readQualContains, writeQualContains;
-
-      auto collectInformationAboutShaderStages =
-          [&](hlsl::PayloadAccessAnnotation *annotation,
-              PayloadAccessQualifierInformation &info) {
-            for (auto shaderType : annotation->ShaderStages) {
-              if (shaderType == DXIL::PayloadAccessShaderStage::Anyhit)
-                info.anyhit = true;
-              else if (shaderType == DXIL::PayloadAccessShaderStage::Closesthit)
-                info.closesthit = true;
-              else if (shaderType == DXIL::PayloadAccessShaderStage::Miss)
-                info.miss = true;
-              else if (shaderType == DXIL::PayloadAccessShaderStage::Caller)
-                info.caller = true;
-            }
-            return true;
-          };
-
-      if (readAnnotation) {
-        if (!collectInformationAboutShaderStages(readAnnotation,
-                                                 readQualContains))
-          return;
-      }
-      if (writeAnnotation) {
-        if (!collectInformationAboutShaderStages(writeAnnotation,
-                                                 writeQualContains))
-          return;
-      }
-
-      if (writeAnnotation) {
-        // Note: keep the following two checks separated to diagnose both
-        //       stages (closesthit and miss)
-        // If closesthit/miss writes a value the caller must consume it.
-        if (writeQualContains.miss) {
-          if (!readAnnotation || !readQualContains.caller) {
-            S.Diag(writeAnnotation->Loc,
-                   diag::err_hlsl_payload_access_qualifier_invalid_combination)
-                << D.getIdentifier() << "write"
-                << "miss"
-                << "consumer";
-          }
-        }
-        if (writeQualContains.closesthit) {
-          if (!readAnnotation || !readQualContains.caller) {
-            S.Diag(writeAnnotation->Loc,
-                   diag::err_hlsl_payload_access_qualifier_invalid_combination)
-                << D.getIdentifier() << "write"
-                << "closesthit"
-                << "consumer";
+        } else if (annotation->qualifier ==
+                   DXIL::PayloadAccessQualifier::Write) {
+          if (!writeAnnotation)
+            writeAnnotation = annotation;
+          else {
+            S.Diag(annotation->Loc,
+                   diag::err_hlsl_payload_access_qualifier_multiple_defined)
+                << "write";
+            return;
           }
         }
 
-        // If anyhit writes, we need at least one consumer
-        if (writeQualContains.anyhit && !readAnnotation) {
+        break;
+      }
+      default:
+        // Ignore all other annotations here.
+        break;
+      }
+    }
+
+    struct PayloadAccessQualifierInformation {
+      bool anyhit = false;
+      bool closesthit = false;
+      bool miss = false;
+      bool caller = false;
+    } readQualContains, writeQualContains;
+
+    auto collectInformationAboutShaderStages =
+        [&](hlsl::PayloadAccessAnnotation *annotation,
+            PayloadAccessQualifierInformation &info) {
+          for (auto shaderType : annotation->ShaderStages) {
+            if (shaderType == DXIL::PayloadAccessShaderStage::Anyhit)
+              info.anyhit = true;
+            else if (shaderType == DXIL::PayloadAccessShaderStage::Closesthit)
+              info.closesthit = true;
+            else if (shaderType == DXIL::PayloadAccessShaderStage::Miss)
+              info.miss = true;
+            else if (shaderType == DXIL::PayloadAccessShaderStage::Caller)
+              info.caller = true;
+          }
+          return true;
+        };
+
+    if (readAnnotation) {
+      if (!collectInformationAboutShaderStages(readAnnotation,
+                                               readQualContains))
+        return;
+    }
+    if (writeAnnotation) {
+      if (!collectInformationAboutShaderStages(writeAnnotation,
+                                               writeQualContains))
+        return;
+    }
+
+    if (writeAnnotation) {
+      // Note: keep the following two checks separated to diagnose both
+      //       stages (closesthit and miss)
+      // If closesthit/miss writes a value the caller must consume it.
+      if (writeQualContains.miss) {
+        if (!readAnnotation || !readQualContains.caller) {
           S.Diag(writeAnnotation->Loc,
                  diag::err_hlsl_payload_access_qualifier_invalid_combination)
               << D.getIdentifier() << "write"
-              << "anyhit"
+              << "miss"
               << "consumer";
         }
-
-        // If the caller writes, we need at least one consumer
-        if (writeQualContains.caller && !readAnnotation) {
+      }
+      if (writeQualContains.closesthit) {
+        if (!readAnnotation || !readQualContains.caller) {
           S.Diag(writeAnnotation->Loc,
                  diag::err_hlsl_payload_access_qualifier_invalid_combination)
               << D.getIdentifier() << "write"
-              << "caller"
+              << "closesthit"
               << "consumer";
         }
       }
 
-      // Validate the read qualifer if present.
-      if (readAnnotation) {
-        // Note: keep the following two checks separated to diagnose both
-        //       stages (closesthit and miss)
-        // If closeshit/miss consume a value we need a producer.
-        // Valid producers are the caller and anyhit.
-        if (readQualContains.miss) {
-          if (!writeAnnotation ||
-              !(writeQualContains.anyhit || writeQualContains.caller)) {
-            S.Diag(readAnnotation->Loc,
-                   diag::err_hlsl_payload_access_qualifier_invalid_combination)
-                << D.getIdentifier() << "read"
-                << "miss"
-                << "producer";
-          }
-        }
+      // If anyhit writes, we need at least one consumer
+      if (writeQualContains.anyhit && !readAnnotation) {
+        S.Diag(writeAnnotation->Loc,
+               diag::err_hlsl_payload_access_qualifier_invalid_combination)
+            << D.getIdentifier() << "write"
+            << "anyhit"
+            << "consumer";
+      }
 
-        // If closeshit/miss consume a value we need a producer.
-        // Valid producers are the caller and anyhit.
-        if (readQualContains.closesthit) {
-          if (!writeAnnotation ||
-              !(writeQualContains.anyhit || writeQualContains.caller)) {
-            S.Diag(readAnnotation->Loc,
-                   diag::err_hlsl_payload_access_qualifier_invalid_combination)
-                << D.getIdentifier() << "read"
-                << "closesthit"
-                << "producer";
-          }
-        }
+      // If the caller writes, we need at least one consumer
+      if (writeQualContains.caller && !readAnnotation) {
+        S.Diag(writeAnnotation->Loc,
+               diag::err_hlsl_payload_access_qualifier_invalid_combination)
+            << D.getIdentifier() << "write"
+            << "caller"
+            << "consumer";
+      }
+    }
 
-        // If anyhit consumes the value we need a producer.
-        // Valid producers are the caller and antoher anyhit.
-        if (readQualContains.anyhit) {
-          if (!writeAnnotation ||
-              !(writeQualContains.anyhit || writeQualContains.caller)) {
-            S.Diag(readAnnotation->Loc,
-                   diag::err_hlsl_payload_access_qualifier_invalid_combination)
-                << D.getIdentifier() << "read"
-                << "anyhit"
-                << "producer";
-          }
-        }
-
-        // If the caller consumes the value we need a valid producer.
-        if (readQualContains.caller && !writeAnnotation) {
+    // Validate the read qualifer if present.
+    if (readAnnotation) {
+      // Note: keep the following two checks separated to diagnose both
+      //       stages (closesthit and miss)
+      // If closeshit/miss consume a value we need a producer.
+      // Valid producers are the caller and anyhit.
+      if (readQualContains.miss) {
+        if (!writeAnnotation ||
+            !(writeQualContains.anyhit || writeQualContains.caller)) {
           S.Diag(readAnnotation->Loc,
                  diag::err_hlsl_payload_access_qualifier_invalid_combination)
               << D.getIdentifier() << "read"
-              << "caller"
+              << "miss"
               << "producer";
         }
       }
-    }
 
-    void hlsl::DiagnoseUnusualAnnotationsForHLSL(
-        Sema & S, std::vector<hlsl::UnusualAnnotation *> & annotations) {
-      bool packoffsetOverriddenReported = false;
-      auto &&iter = annotations.begin();
-      auto &&end = annotations.end();
-      for (; iter != end; ++iter) {
-        switch ((*iter)->getKind()) {
-        case hlsl::UnusualAnnotation::UA_ConstantPacking: {
-          hlsl::ConstantPacking *constantPacking =
-              cast<hlsl::ConstantPacking>(*iter);
-
-          // Check whether this will conflict with other packoffsets. If so,
-          // only issue a warning; last one wins.
-          if (!packoffsetOverriddenReported) {
-            auto newIter = iter;
-            ++newIter;
-            while (newIter != end) {
-              hlsl::ConstantPacking *other =
-                  dyn_cast_or_null<hlsl::ConstantPacking>(*newIter);
-              if (other != nullptr &&
-                  (other->Subcomponent != constantPacking->Subcomponent ||
-                   other->ComponentOffset !=
-                       constantPacking->ComponentOffset)) {
-                S.Diag(constantPacking->Loc,
-                       diag::warn_hlsl_packoffset_overridden);
-                packoffsetOverriddenReported = true;
-                break;
-              }
-              ++newIter;
-            }
-          }
-
-          break;
+      // If closeshit/miss consume a value we need a producer.
+      // Valid producers are the caller and anyhit.
+      if (readQualContains.closesthit) {
+        if (!writeAnnotation ||
+            !(writeQualContains.anyhit || writeQualContains.caller)) {
+          S.Diag(readAnnotation->Loc,
+                 diag::err_hlsl_payload_access_qualifier_invalid_combination)
+              << D.getIdentifier() << "read"
+              << "closesthit"
+              << "producer";
         }
-        case hlsl::UnusualAnnotation::UA_RegisterAssignment: {
-          hlsl::RegisterAssignment *registerAssignment =
-              cast<hlsl::RegisterAssignment>(*iter);
+      }
 
-          // Check whether this will conflict with other register assignments of
-          // the same type.
+      // If anyhit consumes the value we need a producer.
+      // Valid producers are the caller and antoher anyhit.
+      if (readQualContains.anyhit) {
+        if (!writeAnnotation ||
+            !(writeQualContains.anyhit || writeQualContains.caller)) {
+          S.Diag(readAnnotation->Loc,
+                 diag::err_hlsl_payload_access_qualifier_invalid_combination)
+              << D.getIdentifier() << "read"
+              << "anyhit"
+              << "producer";
+        }
+      }
+
+      // If the caller consumes the value we need a valid producer.
+      if (readQualContains.caller && !writeAnnotation) {
+        S.Diag(readAnnotation->Loc,
+               diag::err_hlsl_payload_access_qualifier_invalid_combination)
+            << D.getIdentifier() << "read"
+            << "caller"
+            << "producer";
+      }
+    }
+  }
+
+  void hlsl::DiagnoseUnusualAnnotationsForHLSL(
+      Sema & S, std::vector<hlsl::UnusualAnnotation *> & annotations) {
+    bool packoffsetOverriddenReported = false;
+    auto &&iter = annotations.begin();
+    auto &&end = annotations.end();
+    for (; iter != end; ++iter) {
+      switch ((*iter)->getKind()) {
+      case hlsl::UnusualAnnotation::UA_ConstantPacking: {
+        hlsl::ConstantPacking *constantPacking =
+            cast<hlsl::ConstantPacking>(*iter);
+
+        // Check whether this will conflict with other packoffsets. If so,
+        // only issue a warning; last one wins.
+        if (!packoffsetOverriddenReported) {
           auto newIter = iter;
           ++newIter;
           while (newIter != end) {
-            hlsl::RegisterAssignment *other =
-                dyn_cast_or_null<hlsl::RegisterAssignment>(*newIter);
-
-            // Same register bank and profile, but different number.
+            hlsl::ConstantPacking *other =
+                dyn_cast_or_null<hlsl::ConstantPacking>(*newIter);
             if (other != nullptr &&
-                ShaderModelsMatch(other->ShaderProfile,
-                                  registerAssignment->ShaderProfile) &&
-                other->RegisterType == registerAssignment->RegisterType &&
-                (other->RegisterNumber != registerAssignment->RegisterNumber ||
-                 other->RegisterOffset != registerAssignment->RegisterOffset)) {
-              // Obvious conflict - report it up front.
-              S.Diag(registerAssignment->Loc,
-                     diag::err_hlsl_register_semantics_conflicting);
+                (other->Subcomponent != constantPacking->Subcomponent ||
+                 other->ComponentOffset != constantPacking->ComponentOffset)) {
+              S.Diag(constantPacking->Loc,
+                     diag::warn_hlsl_packoffset_overridden);
+              packoffsetOverriddenReported = true;
+              break;
             }
-
             ++newIter;
           }
-          break;
         }
-        case hlsl::UnusualAnnotation::UA_SemanticDecl: {
-          // hlsl::SemanticDecl* semanticDecl = cast<hlsl::SemanticDecl>(*iter);
-          // No common validation to be performed.
-          break;
+
+        break;
+      }
+      case hlsl::UnusualAnnotation::UA_RegisterAssignment: {
+        hlsl::RegisterAssignment *registerAssignment =
+            cast<hlsl::RegisterAssignment>(*iter);
+
+        // Check whether this will conflict with other register assignments of
+        // the same type.
+        auto newIter = iter;
+        ++newIter;
+        while (newIter != end) {
+          hlsl::RegisterAssignment *other =
+              dyn_cast_or_null<hlsl::RegisterAssignment>(*newIter);
+
+          // Same register bank and profile, but different number.
+          if (other != nullptr &&
+              ShaderModelsMatch(other->ShaderProfile,
+                                registerAssignment->ShaderProfile) &&
+              other->RegisterType == registerAssignment->RegisterType &&
+              (other->RegisterNumber != registerAssignment->RegisterNumber ||
+               other->RegisterOffset != registerAssignment->RegisterOffset)) {
+            // Obvious conflict - report it up front.
+            S.Diag(registerAssignment->Loc,
+                   diag::err_hlsl_register_semantics_conflicting);
+          }
+
+          ++newIter;
         }
-        case hlsl::UnusualAnnotation::UA_PayloadAccessQualifier: {
-          // Validation happens sperately
-          break;
-        }
-        }
+        break;
+      }
+      case hlsl::UnusualAnnotation::UA_SemanticDecl: {
+        // hlsl::SemanticDecl* semanticDecl = cast<hlsl::SemanticDecl>(*iter);
+        // No common validation to be performed.
+        break;
+      }
+      case hlsl::UnusualAnnotation::UA_PayloadAccessQualifier: {
+        // Validation happens sperately
+        break;
+      }
       }
     }
+  }
 
-    clang::OverloadingResult hlsl::GetBestViableFunction(
-        clang::Sema & S, clang::SourceLocation Loc,
-        clang::OverloadCandidateSet & set,
-        clang::OverloadCandidateSet::iterator & Best) {
-      return HLSLExternalSource::FromSema(&S)->GetBestViableFunction(Loc, set,
-                                                                     Best);
-    }
+  clang::OverloadingResult hlsl::GetBestViableFunction(
+      clang::Sema & S, clang::SourceLocation Loc,
+      clang::OverloadCandidateSet & set,
+      clang::OverloadCandidateSet::iterator & Best) {
+    return HLSLExternalSource::FromSema(&S)->GetBestViableFunction(Loc, set,
+                                                                   Best);
+  }
 
-    void hlsl::InitializeInitSequenceForHLSL(
-        Sema * self, const InitializedEntity &Entity,
-        const InitializationKind &Kind, MultiExprArg Args,
-        bool TopLevelOfInitList, InitializationSequence *initSequence) {
-      return HLSLExternalSource::FromSema(self)->InitializeInitSequenceForHLSL(
-          Entity, Kind, Args, TopLevelOfInitList, initSequence);
-    }
+  void hlsl::InitializeInitSequenceForHLSL(
+      Sema * self, const InitializedEntity &Entity,
+      const InitializationKind &Kind, MultiExprArg Args,
+      bool TopLevelOfInitList, InitializationSequence *initSequence) {
+    return HLSLExternalSource::FromSema(self)->InitializeInitSequenceForHLSL(
+        Entity, Kind, Args, TopLevelOfInitList, initSequence);
+  }
 
-    static unsigned CaculateInitListSize(HLSLExternalSource * hlslSource,
-                                         const clang::InitListExpr *InitList) {
-      unsigned totalSize = 0;
-      for (unsigned i = 0; i < InitList->getNumInits(); i++) {
-        const clang::Expr *EltInit = InitList->getInit(i);
-        QualType EltInitTy = EltInit->getType();
-        if (const InitListExpr *EltInitList = dyn_cast<InitListExpr>(EltInit)) {
-          totalSize += CaculateInitListSize(hlslSource, EltInitList);
-        } else {
-          totalSize += hlslSource->GetNumBasicElements(EltInitTy);
-        }
-      }
-      return totalSize;
-    }
-
-    unsigned hlsl::CaculateInitListArraySizeForHLSL(
-        clang::Sema * sema, const clang::InitListExpr *InitList,
-        const clang::QualType EltTy) {
-      HLSLExternalSource *hlslSource = HLSLExternalSource::FromSema(sema);
-      unsigned totalSize = CaculateInitListSize(hlslSource, InitList);
-      unsigned eltSize = hlslSource->GetNumBasicElements(EltTy);
-
-      if (totalSize > 0 && (totalSize % eltSize) == 0) {
-        return totalSize / eltSize;
+  static unsigned CaculateInitListSize(HLSLExternalSource * hlslSource,
+                                       const clang::InitListExpr *InitList) {
+    unsigned totalSize = 0;
+    for (unsigned i = 0; i < InitList->getNumInits(); i++) {
+      const clang::Expr *EltInit = InitList->getInit(i);
+      QualType EltInitTy = EltInit->getType();
+      if (const InitListExpr *EltInitList = dyn_cast<InitListExpr>(EltInit)) {
+        totalSize += CaculateInitListSize(hlslSource, EltInitList);
       } else {
-        return 0;
+        totalSize += hlslSource->GetNumBasicElements(EltInitTy);
       }
     }
+    return totalSize;
+  }
 
-    // NRVO unsafe for a variety of cases in HLSL
-    // - vectors/matrix with bool component types
-    // - attributes not captured to QualType, such as precise and
-    // globallycoherent
-    bool hlsl::ShouldSkipNRVO(clang::Sema & sema, clang::QualType returnType,
-                              clang::VarDecl * VD, clang::FunctionDecl * FD) {
-      // exclude vectors/matrix (not treated as record type)
-      // NRVO breaks on bool component type due to diff between
-      // i32 memory and i1 register representation
-      if (hlsl::IsHLSLVecMatType(returnType))
+  unsigned hlsl::CaculateInitListArraySizeForHLSL(
+      clang::Sema * sema, const clang::InitListExpr *InitList,
+      const clang::QualType EltTy) {
+    HLSLExternalSource *hlslSource = HLSLExternalSource::FromSema(sema);
+    unsigned totalSize = CaculateInitListSize(hlslSource, InitList);
+    unsigned eltSize = hlslSource->GetNumBasicElements(EltTy);
+
+    if (totalSize > 0 && (totalSize % eltSize) == 0) {
+      return totalSize / eltSize;
+    } else {
+      return 0;
+    }
+  }
+
+  // NRVO unsafe for a variety of cases in HLSL
+  // - vectors/matrix with bool component types
+  // - attributes not captured to QualType, such as precise and
+  // globallycoherent
+  bool hlsl::ShouldSkipNRVO(clang::Sema & sema, clang::QualType returnType,
+                            clang::VarDecl * VD, clang::FunctionDecl * FD) {
+    // exclude vectors/matrix (not treated as record type)
+    // NRVO breaks on bool component type due to diff between
+    // i32 memory and i1 register representation
+    if (hlsl::IsHLSLVecMatType(returnType))
+      return true;
+    QualType ArrayEltTy = returnType;
+    while (const clang::ArrayType *AT =
+               sema.getASTContext().getAsArrayType(ArrayEltTy)) {
+      ArrayEltTy = AT->getElementType();
+    }
+    // exclude resource for globallycoherent.
+    if (hlsl::IsHLSLResourceType(ArrayEltTy) ||
+        hlsl::IsHLSLNodeType(ArrayEltTy))
+      return true;
+    // exclude precise.
+    if (VD->hasAttr<HLSLPreciseAttr>()) {
+      return true;
+    }
+    if (FD) {
+      // propagate precise the the VD.
+      if (FD->hasAttr<HLSLPreciseAttr>()) {
+        VD->addAttr(FD->getAttr<HLSLPreciseAttr>());
         return true;
-      QualType ArrayEltTy = returnType;
-      while (const clang::ArrayType *AT =
-                 sema.getASTContext().getAsArrayType(ArrayEltTy)) {
-        ArrayEltTy = AT->getElementType();
       }
-      // exclude resource for globallycoherent.
-      if (hlsl::IsHLSLResourceType(ArrayEltTy) ||
-          hlsl::IsHLSLNodeType(ArrayEltTy))
-        return true;
-      // exclude precise.
-      if (VD->hasAttr<HLSLPreciseAttr>()) {
+
+      // Don't do NRVO if this is an entry function or a patch contsant
+      // function. With NVRO, writing to the return variable directly writes
+      // to the output argument instead of to an alloca which gets copied to
+      // the output arg in one spot. This causes many extra dx.storeOutput's
+      // to be emitted.
+      //
+      // Check if this is an entry function the easy way if we're a library
+      if (const HLSLShaderAttr *Attr = FD->getAttr<HLSLShaderAttr>()) {
         return true;
       }
-      if (FD) {
-        // propagate precise the the VD.
-        if (FD->hasAttr<HLSLPreciseAttr>()) {
-          VD->addAttr(FD->getAttr<HLSLPreciseAttr>());
+      // Check if it's an entry function the hard way
+      if (!FD->getDeclContext()->isNamespace() && FD->isGlobal()) {
+        // Check if this is an entry function by comparing name
+        if (FD->getName() == sema.getLangOpts().HLSLEntryFunction) {
           return true;
         }
 
-        // Don't do NRVO if this is an entry function or a patch contsant
-        // function. With NVRO, writing to the return variable directly writes
-        // to the output argument instead of to an alloca which gets copied to
-        // the output arg in one spot. This causes many extra dx.storeOutput's
-        // to be emitted.
-        //
-        // Check if this is an entry function the easy way if we're a library
-        if (const HLSLShaderAttr *Attr = FD->getAttr<HLSLShaderAttr>()) {
-          return true;
-        }
-        // Check if it's an entry function the hard way
-        if (!FD->getDeclContext()->isNamespace() && FD->isGlobal()) {
-          // Check if this is an entry function by comparing name
-          if (FD->getName() == sema.getLangOpts().HLSLEntryFunction) {
+        // See if it's the patch constant function
+        if (sema.getLangOpts().HLSLProfile.size() &&
+            (sema.getLangOpts().HLSLProfile[0] == 'h' /*For 'hs'*/ ||
+             sema.getLangOpts().HLSLProfile[0] == 'l' /*For 'lib'*/)) {
+          if (hlsl::IsPatchConstantFunctionDecl(FD))
             return true;
-          }
-
-          // See if it's the patch constant function
-          if (sema.getLangOpts().HLSLProfile.size() &&
-              (sema.getLangOpts().HLSLProfile[0] == 'h' /*For 'hs'*/ ||
-               sema.getLangOpts().HLSLProfile[0] == 'l' /*For 'lib'*/)) {
-            if (hlsl::IsPatchConstantFunctionDecl(FD))
-              return true;
-          }
         }
       }
+    }
 
+    return false;
+  }
+
+  bool hlsl::IsConversionToLessOrEqualElements(
+      clang::Sema * self, const clang::ExprResult &sourceExpr,
+      const clang::QualType &targetType, bool explicitConversion) {
+    return HLSLExternalSource::FromSema(self)
+        ->IsConversionToLessOrEqualElements(sourceExpr, targetType,
+                                            explicitConversion);
+  }
+
+  ExprResult hlsl::LookupMatrixMemberExprForHLSL(
+      Sema * self, Expr & BaseExpr, DeclarationName MemberName, bool IsArrow,
+      SourceLocation OpLoc, SourceLocation MemberLoc) {
+    return HLSLExternalSource::FromSema(self)->LookupMatrixMemberExprForHLSL(
+        BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
+  }
+
+  ExprResult hlsl::LookupVectorMemberExprForHLSL(
+      Sema * self, Expr & BaseExpr, DeclarationName MemberName, bool IsArrow,
+      SourceLocation OpLoc, SourceLocation MemberLoc) {
+    return HLSLExternalSource::FromSema(self)->LookupVectorMemberExprForHLSL(
+        BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
+  }
+
+  ExprResult hlsl::LookupArrayMemberExprForHLSL(
+      Sema * self, Expr & BaseExpr, DeclarationName MemberName, bool IsArrow,
+      SourceLocation OpLoc, SourceLocation MemberLoc) {
+    return HLSLExternalSource::FromSema(self)->LookupArrayMemberExprForHLSL(
+        BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
+  }
+
+  bool hlsl::LookupRecordMemberExprForHLSL(
+      Sema * self, Expr & BaseExpr, DeclarationName MemberName, bool IsArrow,
+      SourceLocation OpLoc, SourceLocation MemberLoc, ExprResult &result) {
+    HLSLExternalSource *source = HLSLExternalSource::FromSema(self);
+    switch (source->GetTypeObjectKind(BaseExpr.getType())) {
+    case AR_TOBJ_MATRIX:
+      result = source->LookupMatrixMemberExprForHLSL(BaseExpr, MemberName,
+                                                     IsArrow, OpLoc, MemberLoc);
+      return true;
+    case AR_TOBJ_VECTOR:
+      result = source->LookupVectorMemberExprForHLSL(BaseExpr, MemberName,
+                                                     IsArrow, OpLoc, MemberLoc);
+      return true;
+    case AR_TOBJ_ARRAY:
+      result = source->LookupArrayMemberExprForHLSL(BaseExpr, MemberName,
+                                                    IsArrow, OpLoc, MemberLoc);
+      return true;
+    default:
       return false;
     }
+    return false;
+  }
 
-    bool hlsl::IsConversionToLessOrEqualElements(
-        clang::Sema * self, const clang::ExprResult &sourceExpr,
-        const clang::QualType &targetType, bool explicitConversion) {
-      return HLSLExternalSource::FromSema(self)
-          ->IsConversionToLessOrEqualElements(sourceExpr, targetType,
-                                              explicitConversion);
+  clang::ExprResult hlsl::MaybeConvertMemberAccess(clang::Sema * self,
+                                                   clang::Expr * E) {
+    return HLSLExternalSource::FromSema(self)->MaybeConvertMemberAccess(E);
+  }
+
+  bool hlsl::TryStaticCastForHLSL(
+      Sema * self, ExprResult & SrcExpr, QualType DestType,
+      Sema::CheckedConversionKind CCK, const SourceRange &OpRange,
+      unsigned &msg, CastKind &Kind, CXXCastPath &BasePath,
+      bool ListInitialization, bool SuppressDiagnostics,
+      StandardConversionSequence *standard) {
+    return HLSLExternalSource::FromSema(self)->TryStaticCastForHLSL(
+        SrcExpr, DestType, CCK, OpRange, msg, Kind, BasePath,
+        ListInitialization, SuppressDiagnostics, SuppressDiagnostics, standard);
+  }
+
+  clang::ExprResult hlsl::PerformHLSLConversion(
+      clang::Sema * self, clang::Expr * From, clang::QualType targetType,
+      const clang::StandardConversionSequence &SCS,
+      clang::Sema::CheckedConversionKind CCK) {
+    return HLSLExternalSource::FromSema(self)->PerformHLSLConversion(
+        From, targetType, SCS, CCK);
+  }
+
+  clang::ImplicitConversionSequence hlsl::TrySubscriptIndexInitialization(
+      clang::Sema * self, clang::Expr * SrcExpr, clang::QualType DestType) {
+    return HLSLExternalSource::FromSema(self)->TrySubscriptIndexInitialization(
+        SrcExpr, DestType);
+  }
+
+  /// <summary>Performs HLSL-specific initialization on the specified
+  /// context.</summary>
+  void hlsl::InitializeASTContextForHLSL(ASTContext & context) {
+    HLSLExternalSource *hlslSource = new HLSLExternalSource();
+    IntrusiveRefCntPtr<ExternalASTSource> externalSource(hlslSource);
+    if (hlslSource->Initialize(context)) {
+      context.setExternalSource(externalSource);
     }
+  }
 
-    ExprResult hlsl::LookupMatrixMemberExprForHLSL(
-        Sema * self, Expr & BaseExpr, DeclarationName MemberName, bool IsArrow,
-        SourceLocation OpLoc, SourceLocation MemberLoc) {
-      return HLSLExternalSource::FromSema(self)->LookupMatrixMemberExprForHLSL(
-          BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
-    }
+  ////////////////////////////////////////////////////////////////////////////////
+  // FlattenedTypeIterator implementation //
 
-    ExprResult hlsl::LookupVectorMemberExprForHLSL(
-        Sema * self, Expr & BaseExpr, DeclarationName MemberName, bool IsArrow,
-        SourceLocation OpLoc, SourceLocation MemberLoc) {
-      return HLSLExternalSource::FromSema(self)->LookupVectorMemberExprForHLSL(
-          BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
-    }
-
-    ExprResult hlsl::LookupArrayMemberExprForHLSL(
-        Sema * self, Expr & BaseExpr, DeclarationName MemberName, bool IsArrow,
-        SourceLocation OpLoc, SourceLocation MemberLoc) {
-      return HLSLExternalSource::FromSema(self)->LookupArrayMemberExprForHLSL(
-          BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
-    }
-
-    bool hlsl::LookupRecordMemberExprForHLSL(
-        Sema * self, Expr & BaseExpr, DeclarationName MemberName, bool IsArrow,
-        SourceLocation OpLoc, SourceLocation MemberLoc, ExprResult &result) {
-      HLSLExternalSource *source = HLSLExternalSource::FromSema(self);
-      switch (source->GetTypeObjectKind(BaseExpr.getType())) {
-      case AR_TOBJ_MATRIX:
-        result = source->LookupMatrixMemberExprForHLSL(
-            BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
-        return true;
-      case AR_TOBJ_VECTOR:
-        result = source->LookupVectorMemberExprForHLSL(
-            BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
-        return true;
-      case AR_TOBJ_ARRAY:
-        result = source->LookupArrayMemberExprForHLSL(
-            BaseExpr, MemberName, IsArrow, OpLoc, MemberLoc);
-        return true;
-      default:
-        return false;
-      }
-      return false;
-    }
-
-    clang::ExprResult hlsl::MaybeConvertMemberAccess(clang::Sema * self,
-                                                     clang::Expr * E) {
-      return HLSLExternalSource::FromSema(self)->MaybeConvertMemberAccess(E);
-    }
-
-    bool hlsl::TryStaticCastForHLSL(
-        Sema * self, ExprResult & SrcExpr, QualType DestType,
-        Sema::CheckedConversionKind CCK, const SourceRange &OpRange,
-        unsigned &msg, CastKind &Kind, CXXCastPath &BasePath,
-        bool ListInitialization, bool SuppressDiagnostics,
-        StandardConversionSequence *standard) {
-      return HLSLExternalSource::FromSema(self)->TryStaticCastForHLSL(
-          SrcExpr, DestType, CCK, OpRange, msg, Kind, BasePath,
-          ListInitialization, SuppressDiagnostics, SuppressDiagnostics,
-          standard);
-    }
-
-    clang::ExprResult hlsl::PerformHLSLConversion(
-        clang::Sema * self, clang::Expr * From, clang::QualType targetType,
-        const clang::StandardConversionSequence &SCS,
-        clang::Sema::CheckedConversionKind CCK) {
-      return HLSLExternalSource::FromSema(self)->PerformHLSLConversion(
-          From, targetType, SCS, CCK);
-    }
-
-    clang::ImplicitConversionSequence hlsl::TrySubscriptIndexInitialization(
-        clang::Sema * self, clang::Expr * SrcExpr, clang::QualType DestType) {
-      return HLSLExternalSource::FromSema(self)
-          ->TrySubscriptIndexInitialization(SrcExpr, DestType);
-    }
-
-    /// <summary>Performs HLSL-specific initialization on the specified
-    /// context.</summary>
-    void hlsl::InitializeASTContextForHLSL(ASTContext & context) {
-      HLSLExternalSource *hlslSource = new HLSLExternalSource();
-      IntrusiveRefCntPtr<ExternalASTSource> externalSource(hlslSource);
-      if (hlslSource->Initialize(context)) {
-        context.setExternalSource(externalSource);
-      }
-    }
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // FlattenedTypeIterator implementation //
-
-    /// <summary>Constructs a FlattenedTypeIterator for the specified
-    /// type.</summary>
-    FlattenedTypeIterator::FlattenedTypeIterator(
-        SourceLocation loc, QualType type, HLSLExternalSource & source)
-        : m_source(source), m_draining(false), m_springLoaded(false),
-          m_incompleteCount(0), m_typeDepth(0), m_loc(loc) {
-      if (pushTrackerForType(type, nullptr)) {
-        while (!m_typeTrackers.empty() && !considerLeaf())
-          consumeLeaf();
-      }
-    }
-
-    /// <summary>Constructs a FlattenedTypeIterator for the specified
-    /// expressions.</summary>
-    FlattenedTypeIterator::FlattenedTypeIterator(
-        SourceLocation loc, MultiExprArg args, HLSLExternalSource & source)
-        : m_source(source), m_draining(false), m_springLoaded(false),
-          m_incompleteCount(0), m_typeDepth(0), m_loc(loc) {
-      if (!args.empty()) {
-        MultiExprArg::iterator ii = args.begin();
-        MultiExprArg::iterator ie = args.end();
-        DXASSERT(ii != ie, "otherwise empty() returned an incorrect value");
-        m_typeTrackers.push_back(
-            FlattenedTypeIterator::FlattenedTypeTracker(ii, ie));
-
-        if (!considerLeaf()) {
-          m_typeTrackers.clear();
-        }
-      }
-    }
-
-    /// <summary>Gets the current element in the flattened type
-    /// hierarchy.</summary>
-    QualType FlattenedTypeIterator::getCurrentElement() const {
-      return m_typeTrackers.back().Type;
-    }
-
-    /// <summary>Get the number of repeated current elements.</summary>
-    unsigned int FlattenedTypeIterator::getCurrentElementSize() const {
-      const FlattenedTypeTracker &back = m_typeTrackers.back();
-      return (back.IterKind == FK_IncompleteArray) ? 1 : back.Count;
-    }
-
-    /// <summary>Checks whether the iterator has a current element type to
-    /// report.</summary>
-    bool FlattenedTypeIterator::hasCurrentElement() const {
-      return m_typeTrackers.size() > 0;
-    }
-
-    /// <summary>Consumes count elements on this iterator.</summary>
-    void FlattenedTypeIterator::advanceCurrentElement(unsigned int count) {
-      DXASSERT(!m_typeTrackers.empty(), "otherwise caller should not be trying "
-                                        "to advance to another element");
-      DXASSERT(m_typeTrackers.back().IterKind == FK_IncompleteArray ||
-                   count <= m_typeTrackers.back().Count,
-               "caller should never exceed currently pending element count");
-
-      FlattenedTypeTracker &tracker = m_typeTrackers.back();
-      if (tracker.IterKind == FK_IncompleteArray) {
-        tracker.Count += count;
-        m_springLoaded = true;
-      } else {
-        tracker.Count -= count;
-        m_springLoaded = false;
-        if (m_typeTrackers.back().Count == 0) {
-          advanceLeafTracker();
-        }
-      }
-    }
-
-    unsigned int FlattenedTypeIterator::countRemaining() {
-      m_draining = true; // when draining the iterator, incomplete arrays stop
-                         // functioning as an infinite array
-      size_t result = 0;
-      while (hasCurrentElement() && !m_springLoaded) {
-        size_t pending = getCurrentElementSize();
-        result += pending;
-        advanceCurrentElement(pending);
-      }
-      return result;
-    }
-
-    void FlattenedTypeIterator::advanceLeafTracker() {
-      DXASSERT(!m_typeTrackers.empty(), "otherwise caller should not be trying "
-                                        "to advance to another element");
-      for (;;) {
+  /// <summary>Constructs a FlattenedTypeIterator for the specified
+  /// type.</summary>
+  FlattenedTypeIterator::FlattenedTypeIterator(
+      SourceLocation loc, QualType type, HLSLExternalSource & source)
+      : m_source(source), m_draining(false), m_springLoaded(false),
+        m_incompleteCount(0), m_typeDepth(0), m_loc(loc) {
+    if (pushTrackerForType(type, nullptr)) {
+      while (!m_typeTrackers.empty() && !considerLeaf())
         consumeLeaf();
-        if (m_typeTrackers.empty()) {
-          return;
-        }
+    }
+  }
 
-        if (considerLeaf()) {
-          return;
-        }
+  /// <summary>Constructs a FlattenedTypeIterator for the specified
+  /// expressions.</summary>
+  FlattenedTypeIterator::FlattenedTypeIterator(
+      SourceLocation loc, MultiExprArg args, HLSLExternalSource & source)
+      : m_source(source), m_draining(false), m_springLoaded(false),
+        m_incompleteCount(0), m_typeDepth(0), m_loc(loc) {
+    if (!args.empty()) {
+      MultiExprArg::iterator ii = args.begin();
+      MultiExprArg::iterator ie = args.end();
+      DXASSERT(ii != ie, "otherwise empty() returned an incorrect value");
+      m_typeTrackers.push_back(
+          FlattenedTypeIterator::FlattenedTypeTracker(ii, ie));
+
+      if (!considerLeaf()) {
+        m_typeTrackers.clear();
       }
     }
+  }
 
-    bool FlattenedTypeIterator::considerLeaf() {
+  /// <summary>Gets the current element in the flattened type
+  /// hierarchy.</summary>
+  QualType FlattenedTypeIterator::getCurrentElement() const {
+    return m_typeTrackers.back().Type;
+  }
+
+  /// <summary>Get the number of repeated current elements.</summary>
+  unsigned int FlattenedTypeIterator::getCurrentElementSize() const {
+    const FlattenedTypeTracker &back = m_typeTrackers.back();
+    return (back.IterKind == FK_IncompleteArray) ? 1 : back.Count;
+  }
+
+  /// <summary>Checks whether the iterator has a current element type to
+  /// report.</summary>
+  bool FlattenedTypeIterator::hasCurrentElement() const {
+    return m_typeTrackers.size() > 0;
+  }
+
+  /// <summary>Consumes count elements on this iterator.</summary>
+  void FlattenedTypeIterator::advanceCurrentElement(unsigned int count) {
+    DXASSERT(!m_typeTrackers.empty(), "otherwise caller should not be trying "
+                                      "to advance to another element");
+    DXASSERT(m_typeTrackers.back().IterKind == FK_IncompleteArray ||
+                 count <= m_typeTrackers.back().Count,
+             "caller should never exceed currently pending element count");
+
+    FlattenedTypeTracker &tracker = m_typeTrackers.back();
+    if (tracker.IterKind == FK_IncompleteArray) {
+      tracker.Count += count;
+      m_springLoaded = true;
+    } else {
+      tracker.Count -= count;
+      m_springLoaded = false;
+      if (m_typeTrackers.back().Count == 0) {
+        advanceLeafTracker();
+      }
+    }
+  }
+
+  unsigned int FlattenedTypeIterator::countRemaining() {
+    m_draining = true; // when draining the iterator, incomplete arrays stop
+                       // functioning as an infinite array
+    size_t result = 0;
+    while (hasCurrentElement() && !m_springLoaded) {
+      size_t pending = getCurrentElementSize();
+      result += pending;
+      advanceCurrentElement(pending);
+    }
+    return result;
+  }
+
+  void FlattenedTypeIterator::advanceLeafTracker() {
+    DXASSERT(!m_typeTrackers.empty(), "otherwise caller should not be trying "
+                                      "to advance to another element");
+    for (;;) {
+      consumeLeaf();
       if (m_typeTrackers.empty()) {
-        return false;
+        return;
       }
 
-      m_typeDepth++;
-      if (m_typeDepth > MaxTypeDepth) {
-        m_source.ReportUnsupportedTypeNesting(m_loc, m_firstType);
-        m_typeTrackers.clear();
-        m_typeDepth--;
-        return false;
+      if (considerLeaf()) {
+        return;
+      }
+    }
+  }
+
+  bool FlattenedTypeIterator::considerLeaf() {
+    if (m_typeTrackers.empty()) {
+      return false;
+    }
+
+    m_typeDepth++;
+    if (m_typeDepth > MaxTypeDepth) {
+      m_source.ReportUnsupportedTypeNesting(m_loc, m_firstType);
+      m_typeTrackers.clear();
+      m_typeDepth--;
+      return false;
+    }
+
+    bool result = false;
+    FlattenedTypeTracker &tracker = m_typeTrackers.back();
+    tracker.IsConsidered = true;
+
+    switch (tracker.IterKind) {
+    case FlattenedIterKind::FK_Expressions:
+      if (pushTrackerForExpression(tracker.CurrentExpr)) {
+        result = considerLeaf();
+      }
+      break;
+    case FlattenedIterKind::FK_Fields:
+      if (pushTrackerForType(tracker.CurrentField->getType(), nullptr)) {
+        result = considerLeaf();
+      }
+      break;
+    case FlattenedIterKind::FK_Bases:
+      if (pushTrackerForType(tracker.CurrentBase->getType(), nullptr)) {
+        result = considerLeaf();
+      }
+      break;
+    case FlattenedIterKind::FK_IncompleteArray:
+      m_springLoaded = true;
+      LLVM_FALLTHROUGH;
+    default:
+    case FlattenedIterKind::FK_Simple: {
+      ArTypeObjectKind objectKind = m_source.GetTypeObjectKind(tracker.Type);
+      if (objectKind != ArTypeObjectKind::AR_TOBJ_BASIC &&
+          objectKind != ArTypeObjectKind::AR_TOBJ_OBJECT &&
+          objectKind != ArTypeObjectKind::AR_TOBJ_STRING) {
+        if (pushTrackerForType(tracker.Type, tracker.CurrentExpr)) {
+          result = considerLeaf();
+        }
+      } else {
+        result = true;
+      }
+    }
+    }
+
+    m_typeDepth--;
+    return result;
+  }
+
+  void FlattenedTypeIterator::consumeLeaf() {
+    bool topConsumed = true; // Tracks whether we're processing the topmost
+                             // item which we should consume.
+    for (;;) {
+      if (m_typeTrackers.empty()) {
+        return;
       }
 
-      bool result = false;
       FlattenedTypeTracker &tracker = m_typeTrackers.back();
-      tracker.IsConsidered = true;
-
+      // Reach a leaf which is not considered before.
+      // Stop here.
+      if (!tracker.IsConsidered) {
+        break;
+      }
       switch (tracker.IterKind) {
       case FlattenedIterKind::FK_Expressions:
-        if (pushTrackerForExpression(tracker.CurrentExpr)) {
-          result = considerLeaf();
+        ++tracker.CurrentExpr;
+        if (tracker.CurrentExpr == tracker.EndExpr) {
+          m_typeTrackers.pop_back();
+          topConsumed = false;
+        } else {
+          return;
         }
         break;
       case FlattenedIterKind::FK_Fields:
-        if (pushTrackerForType(tracker.CurrentField->getType(), nullptr)) {
-          result = considerLeaf();
+
+        ++tracker.CurrentField;
+        if (tracker.CurrentField == tracker.EndField) {
+          m_typeTrackers.pop_back();
+          topConsumed = false;
+        } else {
+          return;
         }
         break;
       case FlattenedIterKind::FK_Bases:
-        if (pushTrackerForType(tracker.CurrentBase->getType(), nullptr)) {
-          result = considerLeaf();
+        ++tracker.CurrentBase;
+        if (tracker.CurrentBase == tracker.EndBase) {
+          m_typeTrackers.pop_back();
+          topConsumed = false;
+        } else {
+          return;
         }
         break;
       case FlattenedIterKind::FK_IncompleteArray:
-        m_springLoaded = true;
-        LLVM_FALLTHROUGH;
+        if (m_draining) {
+          DXASSERT(
+              m_typeTrackers.size() == 1,
+              "m_typeTrackers.size() == 1, otherwise incomplete array isn't "
+              "topmost");
+          m_incompleteCount = tracker.Count;
+          m_typeTrackers.pop_back();
+        }
+        return;
       default:
       case FlattenedIterKind::FK_Simple: {
-        ArTypeObjectKind objectKind = m_source.GetTypeObjectKind(tracker.Type);
-        if (objectKind != ArTypeObjectKind::AR_TOBJ_BASIC &&
-            objectKind != ArTypeObjectKind::AR_TOBJ_OBJECT &&
-            objectKind != ArTypeObjectKind::AR_TOBJ_STRING) {
-          if (pushTrackerForType(tracker.Type, tracker.CurrentExpr)) {
-            result = considerLeaf();
-          }
+        m_springLoaded = false;
+        if (!topConsumed) {
+          DXASSERT(tracker.Count > 0,
+                   "tracker.Count > 0 - otherwise we shouldn't be on stack");
+          --tracker.Count;
         } else {
-          result = true;
+          topConsumed = false;
         }
-      }
-      }
-
-      m_typeDepth--;
-      return result;
-    }
-
-    void FlattenedTypeIterator::consumeLeaf() {
-      bool topConsumed = true; // Tracks whether we're processing the topmost
-                               // item which we should consume.
-      for (;;) {
-        if (m_typeTrackers.empty()) {
+        if (tracker.Count == 0) {
+          m_typeTrackers.pop_back();
+        } else {
           return;
         }
-
-        FlattenedTypeTracker &tracker = m_typeTrackers.back();
-        // Reach a leaf which is not considered before.
-        // Stop here.
-        if (!tracker.IsConsidered) {
-          break;
-        }
-        switch (tracker.IterKind) {
-        case FlattenedIterKind::FK_Expressions:
-          ++tracker.CurrentExpr;
-          if (tracker.CurrentExpr == tracker.EndExpr) {
-            m_typeTrackers.pop_back();
-            topConsumed = false;
-          } else {
-            return;
-          }
-          break;
-        case FlattenedIterKind::FK_Fields:
-
-          ++tracker.CurrentField;
-          if (tracker.CurrentField == tracker.EndField) {
-            m_typeTrackers.pop_back();
-            topConsumed = false;
-          } else {
-            return;
-          }
-          break;
-        case FlattenedIterKind::FK_Bases:
-          ++tracker.CurrentBase;
-          if (tracker.CurrentBase == tracker.EndBase) {
-            m_typeTrackers.pop_back();
-            topConsumed = false;
-          } else {
-            return;
-          }
-          break;
-        case FlattenedIterKind::FK_IncompleteArray:
-          if (m_draining) {
-            DXASSERT(
-                m_typeTrackers.size() == 1,
-                "m_typeTrackers.size() == 1, otherwise incomplete array isn't "
-                "topmost");
-            m_incompleteCount = tracker.Count;
-            m_typeTrackers.pop_back();
-          }
-          return;
-        default:
-        case FlattenedIterKind::FK_Simple: {
-          m_springLoaded = false;
-          if (!topConsumed) {
-            DXASSERT(tracker.Count > 0,
-                     "tracker.Count > 0 - otherwise we shouldn't be on stack");
-            --tracker.Count;
-          } else {
-            topConsumed = false;
-          }
-          if (tracker.Count == 0) {
-            m_typeTrackers.pop_back();
-          } else {
-            return;
-          }
-        }
-        }
+      }
       }
     }
+  }
 
-    bool FlattenedTypeIterator::pushTrackerForExpression(
-        MultiExprArg::iterator expression) {
-      Expr *e = *expression;
-      Stmt::StmtClass expressionClass = e->getStmtClass();
-      if (expressionClass == Stmt::StmtClass::InitListExprClass) {
-        InitListExpr *initExpr = dyn_cast<InitListExpr>(e);
-        if (initExpr->getNumInits() == 0) {
-          return false;
+  bool FlattenedTypeIterator::pushTrackerForExpression(
+      MultiExprArg::iterator expression) {
+    Expr *e = *expression;
+    Stmt::StmtClass expressionClass = e->getStmtClass();
+    if (expressionClass == Stmt::StmtClass::InitListExprClass) {
+      InitListExpr *initExpr = dyn_cast<InitListExpr>(e);
+      if (initExpr->getNumInits() == 0) {
+        return false;
+      }
+
+      MultiExprArg inits(initExpr->getInits(), initExpr->getNumInits());
+      MultiExprArg::iterator ii = inits.begin();
+      MultiExprArg::iterator ie = inits.end();
+      DXASSERT(ii != ie, "otherwise getNumInits() returned an incorrect value");
+      m_typeTrackers.push_back(
+          FlattenedTypeIterator::FlattenedTypeTracker(ii, ie));
+      return true;
+    }
+
+    return pushTrackerForType(e->getType(), expression);
+  }
+
+  // TODO: improve this to provide a 'peek' at intermediate types,
+  // which should help compare struct foo[1000] to avoid 1000 steps +
+  // per-field steps
+  bool FlattenedTypeIterator::pushTrackerForType(
+      QualType type, MultiExprArg::iterator expression) {
+    if (type->isVoidType()) {
+      return false;
+    }
+
+    if (type->isFunctionType()) {
+      return false;
+    }
+
+    if (m_firstType.isNull()) {
+      m_firstType = type;
+    }
+
+    ArTypeObjectKind objectKind = m_source.GetTypeObjectKind(type);
+    QualType elementType;
+    unsigned int elementCount;
+    const RecordType *recordType;
+    RecordDecl::field_iterator fi, fe;
+    switch (objectKind) {
+    case ArTypeObjectKind::AR_TOBJ_ARRAY:
+      // TODO: handle multi-dimensional arrays
+      elementType = type->getAsArrayTypeUnsafe()
+                        ->getElementType(); // handle arrays of arrays
+      elementCount = GetArraySize(type);
+      if (elementCount == 0) {
+        if (type->isIncompleteArrayType()) {
+          m_typeTrackers.push_back(
+              FlattenedTypeIterator::FlattenedTypeTracker(elementType));
+          return true;
         }
+        return false;
+      }
 
-        MultiExprArg inits(initExpr->getInits(), initExpr->getNumInits());
-        MultiExprArg::iterator ii = inits.begin();
-        MultiExprArg::iterator ie = inits.end();
-        DXASSERT(ii != ie,
-                 "otherwise getNumInits() returned an incorrect value");
+      m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
+          elementType, elementCount, nullptr));
+
+      return true;
+    case ArTypeObjectKind::AR_TOBJ_BASIC:
+      m_typeTrackers.push_back(
+          FlattenedTypeIterator::FlattenedTypeTracker(type, 1, expression));
+      return true;
+    case ArTypeObjectKind::AR_TOBJ_COMPOUND: {
+      recordType = type->getAs<RecordType>();
+      DXASSERT(recordType, "compound type is expected to be a RecordType");
+
+      fi = recordType->getDecl()->field_begin();
+      fe = recordType->getDecl()->field_end();
+
+      bool bAddTracker = false;
+
+      // Skip empty struct.
+      if (fi != fe) {
         m_typeTrackers.push_back(
-            FlattenedTypeIterator::FlattenedTypeTracker(ii, ie));
-        return true;
+            FlattenedTypeIterator::FlattenedTypeTracker(type, fi, fe));
+        type = (*fi)->getType();
+        bAddTracker = true;
       }
 
-      return pushTrackerForType(e->getType(), expression);
-    }
-
-    // TODO: improve this to provide a 'peek' at intermediate types,
-    // which should help compare struct foo[1000] to avoid 1000 steps +
-    // per-field steps
-    bool FlattenedTypeIterator::pushTrackerForType(
-        QualType type, MultiExprArg::iterator expression) {
-      if (type->isVoidType()) {
-        return false;
-      }
-
-      if (type->isFunctionType()) {
-        return false;
-      }
-
-      if (m_firstType.isNull()) {
-        m_firstType = type;
-      }
-
-      ArTypeObjectKind objectKind = m_source.GetTypeObjectKind(type);
-      QualType elementType;
-      unsigned int elementCount;
-      const RecordType *recordType;
-      RecordDecl::field_iterator fi, fe;
-      switch (objectKind) {
-      case ArTypeObjectKind::AR_TOBJ_ARRAY:
-        // TODO: handle multi-dimensional arrays
-        elementType = type->getAsArrayTypeUnsafe()
-                          ->getElementType(); // handle arrays of arrays
-        elementCount = GetArraySize(type);
-        if (elementCount == 0) {
-          if (type->isIncompleteArrayType()) {
+      if (CXXRecordDecl *cxxRecordDecl =
+              dyn_cast<CXXRecordDecl>(recordType->getDecl())) {
+        // We'll error elsewhere if the record has no definition,
+        // just don't attempt to use it.
+        if (cxxRecordDecl->hasDefinition()) {
+          CXXRecordDecl::base_class_iterator bi, be;
+          bi = cxxRecordDecl->bases_begin();
+          be = cxxRecordDecl->bases_end();
+          if (bi != be) {
+            // Add type tracker for base.
+            // Add base after child to make sure base considered first.
             m_typeTrackers.push_back(
-                FlattenedTypeIterator::FlattenedTypeTracker(elementType));
-            return true;
+                FlattenedTypeIterator::FlattenedTypeTracker(type, bi, be));
+            bAddTracker = true;
           }
-          return false;
         }
-
-        m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
-            elementType, elementCount, nullptr));
-
-        return true;
-      case ArTypeObjectKind::AR_TOBJ_BASIC:
-        m_typeTrackers.push_back(
-            FlattenedTypeIterator::FlattenedTypeTracker(type, 1, expression));
-        return true;
-      case ArTypeObjectKind::AR_TOBJ_COMPOUND: {
+      }
+      return bAddTracker;
+    }
+    case ArTypeObjectKind::AR_TOBJ_MATRIX:
+      m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
+          m_source.GetMatrixOrVectorElementType(type), GetElementCount(type),
+          nullptr));
+      return true;
+    case ArTypeObjectKind::AR_TOBJ_VECTOR:
+      m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
+          m_source.GetMatrixOrVectorElementType(type), GetHLSLVecSize(type),
+          nullptr));
+      return true;
+    case ArTypeObjectKind::AR_TOBJ_OBJECT: {
+      if (m_source.IsSubobjectType(type)) {
+        // subobjects are initialized with initialization lists
         recordType = type->getAs<RecordType>();
-        DXASSERT(recordType, "compound type is expected to be a RecordType");
-
         fi = recordType->getDecl()->field_begin();
         fe = recordType->getDecl()->field_end();
 
-        bool bAddTracker = false;
-
-        // Skip empty struct.
-        if (fi != fe) {
-          m_typeTrackers.push_back(
-              FlattenedTypeIterator::FlattenedTypeTracker(type, fi, fe));
-          type = (*fi)->getType();
-          bAddTracker = true;
-        }
-
-        if (CXXRecordDecl *cxxRecordDecl =
-                dyn_cast<CXXRecordDecl>(recordType->getDecl())) {
-          // We'll error elsewhere if the record has no definition,
-          // just don't attempt to use it.
-          if (cxxRecordDecl->hasDefinition()) {
-            CXXRecordDecl::base_class_iterator bi, be;
-            bi = cxxRecordDecl->bases_begin();
-            be = cxxRecordDecl->bases_end();
-            if (bi != be) {
-              // Add type tracker for base.
-              // Add base after child to make sure base considered first.
-              m_typeTrackers.push_back(
-                  FlattenedTypeIterator::FlattenedTypeTracker(type, bi, be));
-              bAddTracker = true;
-            }
-          }
-        }
-        return bAddTracker;
-      }
-      case ArTypeObjectKind::AR_TOBJ_MATRIX:
-        m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
-            m_source.GetMatrixOrVectorElementType(type), GetElementCount(type),
-            nullptr));
+        m_typeTrackers.push_back(
+            FlattenedTypeIterator::FlattenedTypeTracker(type, fi, fe));
         return true;
-      case ArTypeObjectKind::AR_TOBJ_VECTOR:
-        m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
-            m_source.GetMatrixOrVectorElementType(type), GetHLSLVecSize(type),
-            nullptr));
-        return true;
-      case ArTypeObjectKind::AR_TOBJ_OBJECT: {
-        if (m_source.IsSubobjectType(type)) {
-          // subobjects are initialized with initialization lists
-          recordType = type->getAs<RecordType>();
-          fi = recordType->getDecl()->field_begin();
-          fe = recordType->getDecl()->field_end();
-
-          m_typeTrackers.push_back(
-              FlattenedTypeIterator::FlattenedTypeTracker(type, fi, fe));
-          return true;
-        } else {
-          // Object have no sub-types.
-          m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
-              type.getCanonicalType(), 1, expression));
-          return true;
-        }
-      }
-      case ArTypeObjectKind::AR_TOBJ_STRING: {
-        // Strings have no sub-types.
+      } else {
+        // Object have no sub-types.
         m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
             type.getCanonicalType(), 1, expression));
         return true;
       }
-      default:
-        DXASSERT(false, "unreachable");
-        return false;
-      }
     }
+    case ArTypeObjectKind::AR_TOBJ_STRING: {
+      // Strings have no sub-types.
+      m_typeTrackers.push_back(FlattenedTypeIterator::FlattenedTypeTracker(
+          type.getCanonicalType(), 1, expression));
+      return true;
+    }
+    default:
+      DXASSERT(false, "unreachable");
+      return false;
+    }
+  }
 
-    FlattenedTypeIterator::ComparisonResult
-    FlattenedTypeIterator::CompareIterators(
-        HLSLExternalSource & source, SourceLocation loc,
-        FlattenedTypeIterator & leftIter, FlattenedTypeIterator & rightIter) {
-      FlattenedTypeIterator::ComparisonResult result;
-      result.LeftCount = 0;
-      result.RightCount = 0;
-      result.AreElementsEqual = true;   // Until proven otherwise.
-      result.CanConvertElements = true; // Until proven otherwise.
+  FlattenedTypeIterator::ComparisonResult
+  FlattenedTypeIterator::CompareIterators(
+      HLSLExternalSource & source, SourceLocation loc,
+      FlattenedTypeIterator & leftIter, FlattenedTypeIterator & rightIter) {
+    FlattenedTypeIterator::ComparisonResult result;
+    result.LeftCount = 0;
+    result.RightCount = 0;
+    result.AreElementsEqual = true;   // Until proven otherwise.
+    result.CanConvertElements = true; // Until proven otherwise.
 
-      while (leftIter.hasCurrentElement() && rightIter.hasCurrentElement()) {
-        Expr *actualExpr = rightIter.getExprOrNull();
-        bool hasExpr = actualExpr != nullptr;
-        StmtExpr scratchExpr(nullptr, rightIter.getCurrentElement(), NoLoc,
-                             NoLoc);
-        StandardConversionSequence standard;
-        ExprResult convertedExpr;
-        if (!source.CanConvert(loc, hasExpr ? actualExpr : &scratchExpr,
-                               leftIter.getCurrentElement(),
-                               ExplicitConversionFalse, nullptr, &standard)) {
-          result.AreElementsEqual = false;
-          result.CanConvertElements = false;
-          break;
-        } else if (hasExpr && (standard.First != ICK_Identity ||
-                               !standard.isIdentityConversion())) {
-          convertedExpr = source.getSema()->PerformImplicitConversion(
-              actualExpr, leftIter.getCurrentElement(), standard,
-              Sema::AA_Casting, Sema::CCK_ImplicitConversion);
-        }
-
-        if (rightIter.getCurrentElement()->getCanonicalTypeUnqualified() !=
-            leftIter.getCurrentElement()->getCanonicalTypeUnqualified()) {
-          result.AreElementsEqual = false;
-        }
-
-        unsigned int advance = std::min(leftIter.getCurrentElementSize(),
-                                        rightIter.getCurrentElementSize());
-        DXASSERT(advance > 0, "otherwise one iterator should report empty");
-
-        // If we need to apply conversions to the expressions, then advance a
-        // single element.
-        if (hasExpr && convertedExpr.isUsable()) {
-          rightIter.replaceExpr(convertedExpr.get());
-          advance = 1;
-        }
-
-        // If both elements are unbound arrays, break out or we'll never finish
-        if (leftIter.getCurrentElementKind() == FK_IncompleteArray &&
-            rightIter.getCurrentElementKind() == FK_IncompleteArray)
-          break;
-
-        leftIter.advanceCurrentElement(advance);
-        rightIter.advanceCurrentElement(advance);
-        result.LeftCount += advance;
-        result.RightCount += advance;
+    while (leftIter.hasCurrentElement() && rightIter.hasCurrentElement()) {
+      Expr *actualExpr = rightIter.getExprOrNull();
+      bool hasExpr = actualExpr != nullptr;
+      StmtExpr scratchExpr(nullptr, rightIter.getCurrentElement(), NoLoc,
+                           NoLoc);
+      StandardConversionSequence standard;
+      ExprResult convertedExpr;
+      if (!source.CanConvert(loc, hasExpr ? actualExpr : &scratchExpr,
+                             leftIter.getCurrentElement(),
+                             ExplicitConversionFalse, nullptr, &standard)) {
+        result.AreElementsEqual = false;
+        result.CanConvertElements = false;
+        break;
+      } else if (hasExpr && (standard.First != ICK_Identity ||
+                             !standard.isIdentityConversion())) {
+        convertedExpr = source.getSema()->PerformImplicitConversion(
+            actualExpr, leftIter.getCurrentElement(), standard,
+            Sema::AA_Casting, Sema::CCK_ImplicitConversion);
       }
 
-      result.LeftCount += leftIter.countRemaining();
-      result.RightCount += rightIter.countRemaining();
+      if (rightIter.getCurrentElement()->getCanonicalTypeUnqualified() !=
+          leftIter.getCurrentElement()->getCanonicalTypeUnqualified()) {
+        result.AreElementsEqual = false;
+      }
 
-      return result;
+      unsigned int advance = std::min(leftIter.getCurrentElementSize(),
+                                      rightIter.getCurrentElementSize());
+      DXASSERT(advance > 0, "otherwise one iterator should report empty");
+
+      // If we need to apply conversions to the expressions, then advance a
+      // single element.
+      if (hasExpr && convertedExpr.isUsable()) {
+        rightIter.replaceExpr(convertedExpr.get());
+        advance = 1;
+      }
+
+      // If both elements are unbound arrays, break out or we'll never finish
+      if (leftIter.getCurrentElementKind() == FK_IncompleteArray &&
+          rightIter.getCurrentElementKind() == FK_IncompleteArray)
+        break;
+
+      leftIter.advanceCurrentElement(advance);
+      rightIter.advanceCurrentElement(advance);
+      result.LeftCount += advance;
+      result.RightCount += advance;
     }
 
-    FlattenedTypeIterator::ComparisonResult FlattenedTypeIterator::CompareTypes(
-        HLSLExternalSource & source, SourceLocation leftLoc,
-        SourceLocation rightLoc, QualType left, QualType right) {
-      FlattenedTypeIterator leftIter(leftLoc, left, source);
-      FlattenedTypeIterator rightIter(rightLoc, right, source);
+    result.LeftCount += leftIter.countRemaining();
+    result.RightCount += rightIter.countRemaining();
 
-      return CompareIterators(source, leftLoc, leftIter, rightIter);
-    }
+    return result;
+  }
 
-    FlattenedTypeIterator::ComparisonResult
-    FlattenedTypeIterator::CompareTypesForInit(
-        HLSLExternalSource & source, QualType left, MultiExprArg args,
-        SourceLocation leftLoc, SourceLocation rightLoc) {
-      FlattenedTypeIterator leftIter(leftLoc, left, source);
-      FlattenedTypeIterator rightIter(rightLoc, args, source);
+  FlattenedTypeIterator::ComparisonResult FlattenedTypeIterator::CompareTypes(
+      HLSLExternalSource & source, SourceLocation leftLoc,
+      SourceLocation rightLoc, QualType left, QualType right) {
+    FlattenedTypeIterator leftIter(leftLoc, left, source);
+    FlattenedTypeIterator rightIter(rightLoc, right, source);
 
-      return CompareIterators(source, leftLoc, leftIter, rightIter);
-    }
+    return CompareIterators(source, leftLoc, leftIter, rightIter);
+  }
 
-    ////////////////////////////////////////////////////////////////////////////////
-    // Attribute processing support. //
+  FlattenedTypeIterator::ComparisonResult
+  FlattenedTypeIterator::CompareTypesForInit(
+      HLSLExternalSource & source, QualType left, MultiExprArg args,
+      SourceLocation leftLoc, SourceLocation rightLoc) {
+    FlattenedTypeIterator leftIter(leftLoc, left, source);
+    FlattenedTypeIterator rightIter(rightLoc, args, source);
 
-    static int ValidateAttributeIntArg(Sema & S, const AttributeList &Attr,
-                                       unsigned index = 0) {
-      int64_t value = 0;
+    return CompareIterators(source, leftLoc, leftIter, rightIter);
+  }
 
-      if (Attr.getNumArgs() > index) {
-        Expr *E = nullptr;
-        if (!Attr.isArgExpr(index)) {
-          // For case arg is constant variable.
-          IdentifierLoc *loc = Attr.getArgAsIdent(index);
+  ////////////////////////////////////////////////////////////////////////////////
+  // Attribute processing support. //
 
-          VarDecl *decl = dyn_cast_or_null<VarDecl>(
-              S.LookupSingleName(S.getCurScope(), loc->Ident, loc->Loc,
-                                 Sema::LookupNameKind::LookupOrdinaryName));
-          if (!decl) {
+  static int ValidateAttributeIntArg(Sema & S, const AttributeList &Attr,
+                                     unsigned index = 0) {
+    int64_t value = 0;
+
+    if (Attr.getNumArgs() > index) {
+      Expr *E = nullptr;
+      if (!Attr.isArgExpr(index)) {
+        // For case arg is constant variable.
+        IdentifierLoc *loc = Attr.getArgAsIdent(index);
+
+        VarDecl *decl = dyn_cast_or_null<VarDecl>(
+            S.LookupSingleName(S.getCurScope(), loc->Ident, loc->Loc,
+                               Sema::LookupNameKind::LookupOrdinaryName));
+        if (!decl) {
+          S.Diag(Attr.getLoc(), diag::warn_hlsl_attribute_expects_uint_literal)
+              << Attr.getName();
+          return value;
+        }
+        Expr *init = decl->getInit();
+        if (!init) {
+          S.Diag(Attr.getLoc(), diag::warn_hlsl_attribute_expects_uint_literal)
+              << Attr.getName();
+          return value;
+        }
+        E = init;
+      } else
+        E = Attr.getArgAsExpr(index);
+
+      clang::APValue ArgNum;
+      bool displayError = false;
+      if (E->isTypeDependent() || E->isValueDependent() ||
+          !E->isCXX11ConstantExpr(S.Context, &ArgNum)) {
+        displayError = true;
+      } else {
+        if (ArgNum.isInt()) {
+          value = ArgNum.getInt().getSExtValue();
+        } else if (ArgNum.isFloat()) {
+          llvm::APSInt floatInt;
+          bool isPrecise;
+          if (ArgNum.getFloat().convertToInteger(
+                  floatInt, llvm::APFloat::rmTowardZero, &isPrecise) ==
+              llvm::APFloat::opStatus::opOK) {
+            value = floatInt.getSExtValue();
+          } else {
             S.Diag(Attr.getLoc(),
                    diag::warn_hlsl_attribute_expects_uint_literal)
                 << Attr.getName();
-            return value;
           }
-          Expr *init = decl->getInit();
-          if (!init) {
-            S.Diag(Attr.getLoc(),
-                   diag::warn_hlsl_attribute_expects_uint_literal)
-                << Attr.getName();
-            return value;
-          }
-          E = init;
-        } else
-          E = Attr.getArgAsExpr(index);
-
-        clang::APValue ArgNum;
-        bool displayError = false;
-        if (E->isTypeDependent() || E->isValueDependent() ||
-            !E->isCXX11ConstantExpr(S.Context, &ArgNum)) {
+        } else {
           displayError = true;
-        } else {
-          if (ArgNum.isInt()) {
-            value = ArgNum.getInt().getSExtValue();
-          } else if (ArgNum.isFloat()) {
-            llvm::APSInt floatInt;
-            bool isPrecise;
-            if (ArgNum.getFloat().convertToInteger(
-                    floatInt, llvm::APFloat::rmTowardZero, &isPrecise) ==
-                llvm::APFloat::opStatus::opOK) {
-              value = floatInt.getSExtValue();
-            } else {
-              S.Diag(Attr.getLoc(),
-                     diag::warn_hlsl_attribute_expects_uint_literal)
-                  << Attr.getName();
-            }
-          } else {
-            displayError = true;
-          }
-
-          if (value < 0) {
-            S.Diag(Attr.getLoc(),
-                   diag::warn_hlsl_attribute_expects_uint_literal)
-                << Attr.getName();
-          }
         }
 
-        if (displayError) {
-          S.Diag(Attr.getLoc(), diag::err_attribute_argument_type)
-              << Attr.getName() << AANT_ArgumentIntegerConstant
-              << E->getSourceRange();
-        }
-      }
-
-      return (int)value;
-    }
-
-    // TODO: support float arg directly.
-    static int ValidateAttributeFloatArg(Sema & S, const AttributeList &Attr,
-                                         unsigned index = 0) {
-      int value = 0;
-      if (Attr.getNumArgs() > index) {
-        Expr *E = Attr.getArgAsExpr(index);
-
-        if (FloatingLiteral *FL = dyn_cast<FloatingLiteral>(E)) {
-          llvm::APFloat flV = FL->getValue();
-          if (flV.getSizeInBits(flV.getSemantics()) == 64) {
-            llvm::APInt intV = llvm::APInt::floatToBits(flV.convertToDouble());
-            value = intV.getLimitedValue();
-          } else {
-            llvm::APInt intV = llvm::APInt::floatToBits(flV.convertToFloat());
-            value = intV.getLimitedValue();
-          }
-        } else if (IntegerLiteral *IL = dyn_cast<IntegerLiteral>(E)) {
-          llvm::APInt intV =
-              llvm::APInt::floatToBits((float)IL->getValue().getLimitedValue());
-          value = intV.getLimitedValue();
-        } else {
-          S.Diag(E->getLocStart(),
-                 diag::err_hlsl_attribute_expects_float_literal)
+        if (value < 0) {
+          S.Diag(Attr.getLoc(), diag::warn_hlsl_attribute_expects_uint_literal)
               << Attr.getName();
         }
       }
-      return value;
+
+      if (displayError) {
+        S.Diag(Attr.getLoc(), diag::err_attribute_argument_type)
+            << Attr.getName() << AANT_ArgumentIntegerConstant
+            << E->getSourceRange();
+      }
     }
 
-    template <typename AttrType, typename EnumType,
-              bool (*ConvertStrToEnumType)(StringRef, EnumType &)>
-    static EnumType ValidateAttributeEnumArg(
-        Sema & S, const AttributeList &Attr, EnumType defaultValue,
-        unsigned index = 0, bool isCaseSensitive = true) {
-      EnumType value(defaultValue);
-      StringRef Str = "";
-      SourceLocation ArgLoc;
+    return (int)value;
+  }
 
-      if (Attr.getNumArgs() > index) {
-        if (!S.checkStringLiteralArgumentAttr(Attr, 0, Str, &ArgLoc))
-          return value;
+  // TODO: support float arg directly.
+  static int ValidateAttributeFloatArg(Sema & S, const AttributeList &Attr,
+                                       unsigned index = 0) {
+    int value = 0;
+    if (Attr.getNumArgs() > index) {
+      Expr *E = Attr.getArgAsExpr(index);
 
-        std::string str = isCaseSensitive ? Str.str() : Str.lower();
-
-        if (!ConvertStrToEnumType(str, value)) {
-          S.Diag(Attr.getLoc(), diag::warn_attribute_type_not_supported)
-              << Attr.getName() << Str << ArgLoc;
+      if (FloatingLiteral *FL = dyn_cast<FloatingLiteral>(E)) {
+        llvm::APFloat flV = FL->getValue();
+        if (flV.getSizeInBits(flV.getSemantics()) == 64) {
+          llvm::APInt intV = llvm::APInt::floatToBits(flV.convertToDouble());
+          value = intV.getLimitedValue();
+        } else {
+          llvm::APInt intV = llvm::APInt::floatToBits(flV.convertToFloat());
+          value = intV.getLimitedValue();
         }
+      } else if (IntegerLiteral *IL = dyn_cast<IntegerLiteral>(E)) {
+        llvm::APInt intV =
+            llvm::APInt::floatToBits((float)IL->getValue().getLimitedValue());
+        value = intV.getLimitedValue();
+      } else {
+        S.Diag(E->getLocStart(), diag::err_hlsl_attribute_expects_float_literal)
+            << Attr.getName();
+      }
+    }
+    return value;
+  }
+
+  template <typename AttrType, typename EnumType,
+            bool (*ConvertStrToEnumType)(StringRef, EnumType &)>
+  static EnumType ValidateAttributeEnumArg(
+      Sema & S, const AttributeList &Attr, EnumType defaultValue,
+      unsigned index = 0, bool isCaseSensitive = true) {
+    EnumType value(defaultValue);
+    StringRef Str = "";
+    SourceLocation ArgLoc;
+
+    if (Attr.getNumArgs() > index) {
+      if (!S.checkStringLiteralArgumentAttr(Attr, 0, Str, &ArgLoc))
         return value;
+
+      std::string str = isCaseSensitive ? Str.str() : Str.lower();
+
+      if (!ConvertStrToEnumType(str, value)) {
+        S.Diag(Attr.getLoc(), diag::warn_attribute_type_not_supported)
+            << Attr.getName() << Str << ArgLoc;
       }
       return value;
     }
+    return value;
+  }
 
-    static Stmt *IgnoreParensAndDecay(Stmt * S) {
-      for (;;) {
-        switch (S->getStmtClass()) {
-        case Stmt::ParenExprClass:
-          S = cast<ParenExpr>(S)->getSubExpr();
-          break;
-        case Stmt::ImplicitCastExprClass: {
-          ImplicitCastExpr *castExpr = cast<ImplicitCastExpr>(S);
-          if (castExpr->getCastKind() != CK_ArrayToPointerDecay &&
-              castExpr->getCastKind() != CK_NoOp &&
-              castExpr->getCastKind() != CK_LValueToRValue) {
-            return S;
-          }
-          S = castExpr->getSubExpr();
-        } break;
-        default:
+  static Stmt *IgnoreParensAndDecay(Stmt * S) {
+    for (;;) {
+      switch (S->getStmtClass()) {
+      case Stmt::ParenExprClass:
+        S = cast<ParenExpr>(S)->getSubExpr();
+        break;
+      case Stmt::ImplicitCastExprClass: {
+        ImplicitCastExpr *castExpr = cast<ImplicitCastExpr>(S);
+        if (castExpr->getCastKind() != CK_ArrayToPointerDecay &&
+            castExpr->getCastKind() != CK_NoOp &&
+            castExpr->getCastKind() != CK_LValueToRValue) {
           return S;
         }
+        S = castExpr->getSubExpr();
+      } break;
+      default:
+        return S;
       }
     }
+  }
 
-    static Expr *ValidateClipPlaneArraySubscriptExpr(Sema & S,
-                                                     ArraySubscriptExpr * E) {
-      DXASSERT_NOMSG(E != nullptr);
+  static Expr *ValidateClipPlaneArraySubscriptExpr(Sema & S,
+                                                   ArraySubscriptExpr * E) {
+    DXASSERT_NOMSG(E != nullptr);
 
-      Expr *subscriptExpr = E->getIdx();
-      subscriptExpr = dyn_cast<Expr>(subscriptExpr->IgnoreParens());
-      if (subscriptExpr == nullptr || subscriptExpr->isTypeDependent() ||
-          subscriptExpr->isValueDependent() ||
-          !subscriptExpr->isCXX11ConstantExpr(S.Context)) {
-        S.Diag(
-            (subscriptExpr == nullptr) ? E->getLocStart()
-                                       : subscriptExpr->getLocStart(),
-            diag::err_hlsl_unsupported_clipplane_argument_subscript_expression);
-        return nullptr;
-      }
-
-      return E->getBase();
+    Expr *subscriptExpr = E->getIdx();
+    subscriptExpr = dyn_cast<Expr>(subscriptExpr->IgnoreParens());
+    if (subscriptExpr == nullptr || subscriptExpr->isTypeDependent() ||
+        subscriptExpr->isValueDependent() ||
+        !subscriptExpr->isCXX11ConstantExpr(S.Context)) {
+      S.Diag(
+          (subscriptExpr == nullptr) ? E->getLocStart()
+                                     : subscriptExpr->getLocStart(),
+          diag::err_hlsl_unsupported_clipplane_argument_subscript_expression);
+      return nullptr;
     }
 
-    static bool IsValidClipPlaneDecl(Decl * D) {
-      Decl::Kind kind = D->getKind();
-      if (kind == Decl::Var) {
-        VarDecl *varDecl = cast<VarDecl>(D);
-        if (varDecl->getStorageClass() == StorageClass::SC_Static &&
-            varDecl->getType().isConstQualified()) {
-          return false;
-        }
+    return E->getBase();
+  }
 
-        return true;
-      } else if (kind == Decl::Field) {
-        return true;
+  static bool IsValidClipPlaneDecl(Decl * D) {
+    Decl::Kind kind = D->getKind();
+    if (kind == Decl::Var) {
+      VarDecl *varDecl = cast<VarDecl>(D);
+      if (varDecl->getStorageClass() == StorageClass::SC_Static &&
+          varDecl->getType().isConstQualified()) {
+        return false;
       }
-      return false;
+
+      return true;
+    } else if (kind == Decl::Field) {
+      return true;
     }
+    return false;
+  }
 
-    static Expr *ValidateClipPlaneExpr(Sema & S, Expr * E) {
-      Stmt *cursor = E;
+  static Expr *ValidateClipPlaneExpr(Sema & S, Expr * E) {
+    Stmt *cursor = E;
 
-      // clip plane expressions are a linear path, so no need to traverse the
-      // tree here.
-      while (cursor != nullptr) {
-        bool supported = true;
-        cursor = IgnoreParensAndDecay(cursor);
-        switch (cursor->getStmtClass()) {
-        case Stmt::ArraySubscriptExprClass:
-          cursor = ValidateClipPlaneArraySubscriptExpr(
-              S, cast<ArraySubscriptExpr>(cursor));
-          if (cursor == nullptr) {
-            // nullptr indicates failure, and the error message has already been
-            // printed out
-            return nullptr;
-          }
-          break;
-        case Stmt::DeclRefExprClass: {
-          DeclRefExpr *declRef = cast<DeclRefExpr>(cursor);
-          Decl *decl = declRef->getDecl();
-          supported = IsValidClipPlaneDecl(decl);
-          cursor = supported ? nullptr : cursor;
-        } break;
-        case Stmt::MemberExprClass: {
-          MemberExpr *member = cast<MemberExpr>(cursor);
-          supported = IsValidClipPlaneDecl(member->getMemberDecl());
-          cursor = supported ? member->getBase() : cursor;
-        } break;
-        default:
-          supported = false;
-          break;
-        }
-
-        if (!supported) {
-          DXASSERT(cursor != nullptr, "otherwise it was cleared when the "
-                                      "supported flag was set to false");
-          S.Diag(cursor->getLocStart(),
-                 diag::err_hlsl_unsupported_clipplane_argument_expression);
+    // clip plane expressions are a linear path, so no need to traverse the
+    // tree here.
+    while (cursor != nullptr) {
+      bool supported = true;
+      cursor = IgnoreParensAndDecay(cursor);
+      switch (cursor->getStmtClass()) {
+      case Stmt::ArraySubscriptExprClass:
+        cursor = ValidateClipPlaneArraySubscriptExpr(
+            S, cast<ArraySubscriptExpr>(cursor));
+        if (cursor == nullptr) {
+          // nullptr indicates failure, and the error message has already been
+          // printed out
           return nullptr;
         }
+        break;
+      case Stmt::DeclRefExprClass: {
+        DeclRefExpr *declRef = cast<DeclRefExpr>(cursor);
+        Decl *decl = declRef->getDecl();
+        supported = IsValidClipPlaneDecl(decl);
+        cursor = supported ? nullptr : cursor;
+      } break;
+      case Stmt::MemberExprClass: {
+        MemberExpr *member = cast<MemberExpr>(cursor);
+        supported = IsValidClipPlaneDecl(member->getMemberDecl());
+        cursor = supported ? member->getBase() : cursor;
+      } break;
+      default:
+        supported = false;
+        break;
       }
 
-      // Validate that the type is a float4.
-      QualType expressionType = E->getType();
-      HLSLExternalSource *hlslSource = HLSLExternalSource::FromSema(&S);
-      if (hlslSource->GetTypeElementKind(expressionType) !=
-              ArBasicKind::AR_BASIC_FLOAT32 ||
-          hlslSource->GetTypeObjectKind(expressionType) !=
-              ArTypeObjectKind::AR_TOBJ_VECTOR) {
-        S.Diag(E->getLocStart(),
-               diag::err_hlsl_unsupported_clipplane_argument_type)
-            << expressionType;
+      if (!supported) {
+        DXASSERT(cursor != nullptr, "otherwise it was cleared when the "
+                                    "supported flag was set to false");
+        S.Diag(cursor->getLocStart(),
+               diag::err_hlsl_unsupported_clipplane_argument_expression);
         return nullptr;
       }
-
-      return E;
     }
 
-    static Attr *HandleClipPlanes(Sema & S, const AttributeList &A) {
-      Expr *clipExprs[6];
-      for (unsigned int index = 0; index < _countof(clipExprs); index++) {
-        if (A.getNumArgs() <= index) {
-          clipExprs[index] = nullptr;
-          continue;
-        }
+    // Validate that the type is a float4.
+    QualType expressionType = E->getType();
+    HLSLExternalSource *hlslSource = HLSLExternalSource::FromSema(&S);
+    if (hlslSource->GetTypeElementKind(expressionType) !=
+            ArBasicKind::AR_BASIC_FLOAT32 ||
+        hlslSource->GetTypeObjectKind(expressionType) !=
+            ArTypeObjectKind::AR_TOBJ_VECTOR) {
+      S.Diag(E->getLocStart(),
+             diag::err_hlsl_unsupported_clipplane_argument_type)
+          << expressionType;
+      return nullptr;
+    }
 
-        Expr *E = A.getArgAsExpr(index);
-        clipExprs[index] = ValidateClipPlaneExpr(S, E);
+    return E;
+  }
+
+  static Attr *HandleClipPlanes(Sema & S, const AttributeList &A) {
+    Expr *clipExprs[6];
+    for (unsigned int index = 0; index < _countof(clipExprs); index++) {
+      if (A.getNumArgs() <= index) {
+        clipExprs[index] = nullptr;
+        continue;
       }
-
-      return ::new (S.Context) HLSLClipPlanesAttr(
-          A.getRange(), S.Context, clipExprs[0], clipExprs[1], clipExprs[2],
-          clipExprs[3], clipExprs[4], clipExprs[5],
-          A.getAttributeSpellingListIndex());
-    }
-
-    static Attr *HandleUnrollAttribute(Sema & S, const AttributeList &Attr) {
-      int argValue = ValidateAttributeIntArg(S, Attr);
-      // Default value is 0 (full unroll).
-      if (Attr.getNumArgs() == 0)
-        argValue = 0;
-      return ::new (S.Context)
-          HLSLUnrollAttr(Attr.getRange(), S.Context, argValue,
-                         Attr.getAttributeSpellingListIndex());
-    }
-
-    static void ValidateAttributeOnLoop(Sema & S, Stmt * St,
-                                        const AttributeList &Attr) {
-      Stmt::StmtClass stClass = St->getStmtClass();
-      if (stClass != Stmt::ForStmtClass && stClass != Stmt::WhileStmtClass &&
-          stClass != Stmt::DoStmtClass) {
-        S.Diag(Attr.getLoc(),
-               diag::warn_hlsl_unsupported_statement_for_loop_attribute)
-            << Attr.getName();
-      }
-    }
-
-    static void ValidateAttributeOnSwitch(Sema & S, Stmt * St,
-                                          const AttributeList &Attr) {
-      Stmt::StmtClass stClass = St->getStmtClass();
-      if (stClass != Stmt::SwitchStmtClass) {
-        S.Diag(Attr.getLoc(),
-               diag::warn_hlsl_unsupported_statement_for_switch_attribute)
-            << Attr.getName();
-      }
-    }
-
-    static void ValidateAttributeOnSwitchOrIf(Sema & S, Stmt * St,
-                                              const AttributeList &Attr) {
-      Stmt::StmtClass stClass = St->getStmtClass();
-      if (stClass != Stmt::SwitchStmtClass && stClass != Stmt::IfStmtClass) {
-        S.Diag(Attr.getLoc(),
-               diag::warn_hlsl_unsupported_statement_for_if_switch_attribute)
-            << Attr.getName();
-      }
-    }
-
-    static StringRef ValidateAttributeStringArg(
-        Sema & S, const AttributeList &A, const char *values,
-        unsigned index = 0) {
-
-      // values is an optional comma-separated list of potential values.
-      if (A.getNumArgs() <= index)
-        return StringRef();
 
       Expr *E = A.getArgAsExpr(index);
-      if (E->isTypeDependent() || E->isValueDependent() ||
-          E->getStmtClass() != Stmt::StringLiteralClass) {
-        S.Diag(E->getLocStart(),
-               diag::err_hlsl_attribute_expects_string_literal)
-            << A.getName();
-        return StringRef();
-      }
+      clipExprs[index] = ValidateClipPlaneExpr(S, E);
+    }
 
-      StringLiteral *sl = cast<StringLiteral>(E);
-      StringRef result = sl->getString();
+    return ::new (S.Context)
+        HLSLClipPlanesAttr(A.getRange(), S.Context, clipExprs[0], clipExprs[1],
+                           clipExprs[2], clipExprs[3], clipExprs[4],
+                           clipExprs[5], A.getAttributeSpellingListIndex());
+  }
 
-      // Return result with no additional validation.
-      if (values == nullptr) {
-        return result;
-      }
+  static Attr *HandleUnrollAttribute(Sema & S, const AttributeList &Attr) {
+    int argValue = ValidateAttributeIntArg(S, Attr);
+    // Default value is 0 (full unroll).
+    if (Attr.getNumArgs() == 0)
+      argValue = 0;
+    return ::new (S.Context)
+        HLSLUnrollAttr(Attr.getRange(), S.Context, argValue,
+                       Attr.getAttributeSpellingListIndex());
+  }
 
-      const char *value = values;
-      while (*value != '\0') {
-        DXASSERT_NOMSG(*value != ','); // no leading commas in values
+  static void ValidateAttributeOnLoop(Sema & S, Stmt * St,
+                                      const AttributeList &Attr) {
+    Stmt::StmtClass stClass = St->getStmtClass();
+    if (stClass != Stmt::ForStmtClass && stClass != Stmt::WhileStmtClass &&
+        stClass != Stmt::DoStmtClass) {
+      S.Diag(Attr.getLoc(),
+             diag::warn_hlsl_unsupported_statement_for_loop_attribute)
+          << Attr.getName();
+    }
+  }
 
-        // Look for a match.
-        const char *argData = result.data();
-        size_t argDataLen = result.size();
+  static void ValidateAttributeOnSwitch(Sema & S, Stmt * St,
+                                        const AttributeList &Attr) {
+    Stmt::StmtClass stClass = St->getStmtClass();
+    if (stClass != Stmt::SwitchStmtClass) {
+      S.Diag(Attr.getLoc(),
+             diag::warn_hlsl_unsupported_statement_for_switch_attribute)
+          << Attr.getName();
+    }
+  }
 
-        while (argDataLen != 0 && *argData == *value && *value) {
-          ++argData;
-          ++value;
-          --argDataLen;
-        }
+  static void ValidateAttributeOnSwitchOrIf(Sema & S, Stmt * St,
+                                            const AttributeList &Attr) {
+    Stmt::StmtClass stClass = St->getStmtClass();
+    if (stClass != Stmt::SwitchStmtClass && stClass != Stmt::IfStmtClass) {
+      S.Diag(Attr.getLoc(),
+             diag::warn_hlsl_unsupported_statement_for_if_switch_attribute)
+          << Attr.getName();
+    }
+  }
 
-        // Match found if every input character matched.
-        if (argDataLen == 0 && (*value == '\0' || *value == ',')) {
-          return result;
-        }
+  static StringRef ValidateAttributeStringArg(Sema & S, const AttributeList &A,
+                                              const char *values,
+                                              unsigned index = 0) {
 
-        // Move to next separator.
-        while (*value != '\0' && *value != ',') {
-          ++value;
-        }
+    // values is an optional comma-separated list of potential values.
+    if (A.getNumArgs() <= index)
+      return StringRef();
 
-        // Move to the start of the next item if any.
-        if (*value == ',')
-          value++;
-      }
-
-      DXASSERT_NOMSG(*value == '\0'); // no other terminating conditions
-
-      // No match found.
-      S.Diag(E->getLocStart(),
-             diag::err_hlsl_attribute_expects_string_literal_from_list)
-          << A.getName() << values;
+    Expr *E = A.getArgAsExpr(index);
+    if (E->isTypeDependent() || E->isValueDependent() ||
+        E->getStmtClass() != Stmt::StringLiteralClass) {
+      S.Diag(E->getLocStart(), diag::err_hlsl_attribute_expects_string_literal)
+          << A.getName();
       return StringRef();
     }
 
-    static bool ValidateAttributeTargetIsFunction(Sema & S, Decl * D,
-                                                  const AttributeList &A) {
-      if (D->isFunctionOrFunctionTemplate()) {
-        return true;
-      }
+    StringLiteral *sl = cast<StringLiteral>(E);
+    StringRef result = sl->getString();
 
-      S.Diag(A.getLoc(), diag::err_hlsl_attribute_valid_on_function_only);
-      return false;
-    }
-
-    HLSLShaderAttr *ValidateShaderAttributes(Sema & S, Decl * D,
-                                             const AttributeList &A) {
-      Expr *ArgExpr = A.getArgAsExpr(0);
-      StringLiteral *Literal =
-          dyn_cast<StringLiteral>(ArgExpr->IgnoreParenCasts());
-      DXIL::ShaderKind Stage =
-          ShaderModel::KindFromFullName(Literal->getString());
-      if (Stage == DXIL::ShaderKind::Invalid) {
-        S.Diag(A.getLoc(),
-               diag::err_hlsl_attribute_expects_string_literal_from_list)
-            << "'shader'"
-            << "compute,vertex,pixel,hull,domain,geometry,raygeneration,"
-               "intersection,anyhit,closesthit,miss,callable,mesh,"
-               "amplification,node";
-        return nullptr; // don't create the attribute
-      }
-
-      HLSLShaderAttr *Existing = D->getAttr<HLSLShaderAttr>();
-      if (Existing) {
-        DXIL::ShaderKind NewStage =
-            ShaderModel::KindFromFullName(Existing->getStage());
-        if (Stage == NewStage)
-          return nullptr; // don't create, but no error.
-        else {
-          S.Diag(A.getLoc(), diag::err_hlsl_conflicting_shader_attribute)
-              << ShaderModel::FullNameFromKind(Stage)
-              << ShaderModel::FullNameFromKind(NewStage);
-          S.Diag(Existing->getLocation(), diag::note_conflicting_attribute);
-          return nullptr;
-        }
-      }
-      return ::new (S.Context)
-          HLSLShaderAttr(A.getRange(), S.Context, Literal->getString(),
-                         A.getAttributeSpellingListIndex());
-    }
-
-    HLSLMaxRecordsAttr *ValidateMaxRecordsAttributes(Sema & S, Decl * D,
-                                                     const AttributeList &A) {
-
-      HLSLMaxRecordsAttr *ExistingMRA = D->getAttr<HLSLMaxRecordsAttr>();
-      HLSLMaxRecordsSharedWithAttr *ExistingMRSWA =
-          D->getAttr<HLSLMaxRecordsSharedWithAttr>();
-
-      if (ExistingMRA || ExistingMRSWA) {
-        Expr *ArgExpr = A.getArgAsExpr(0);
-        IntegerLiteral *LiteralInt =
-            dyn_cast<IntegerLiteral>(ArgExpr->IgnoreParenCasts());
-
-        if (ExistingMRSWA ||
-            ExistingMRA->getMaxCount() != LiteralInt->getValue()) {
-          clang::SourceLocation Loc = ExistingMRA
-                                          ? ExistingMRA->getLocation()
-                                          : ExistingMRSWA->getLocation();
-          S.Diag(A.getLoc(), diag::err_hlsl_maxrecord_attrs_on_same_arg);
-          S.Diag(A.getLoc(), diag::note_conflicting_attribute);
-          S.Diag(Loc, diag::note_conflicting_attribute);
-          return nullptr;
-        }
-      }
-
-      return ::new (S.Context) HLSLMaxRecordsAttr(
-          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-          A.getAttributeSpellingListIndex());
-    }
-
-    // This function validates the wave size attribute in a stand-alone way,
-    // by directly determining whether the attribute is well formed or
-    // allowed. It performs validation outside of the context
-    // of other attributes that could exist on this decl, and immediately
-    // upon detecting the attribute on the decl.
-    HLSLWaveSizeAttr *ValidateWaveSizeAttributes(Sema & S, Decl * D,
-                                                 const AttributeList &A) {
-      // validate that the wavesize argument is a power of 2 between 4 and 128
-      // inclusive
-      HLSLWaveSizeAttr *pAttr = ::new (S.Context) HLSLWaveSizeAttr(
-          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-          A.getAttributeSpellingListIndex());
-
-      unsigned waveSize = pAttr->getSize();
-      if (!DXIL::IsValidWaveSizeValue(waveSize)) {
-        S.Diag(A.getLoc(), diag::err_hlsl_wavesize_size)
-            << DXIL::kMinWaveSize << DXIL::kMaxWaveSize;
-      }
-
-      // make sure there is not already an existing conflicting
-      // wavesize attribute on the decl
-      HLSLWaveSizeAttr *waveSizeAttr = D->getAttr<HLSLWaveSizeAttr>();
-      if (waveSizeAttr) {
-        if (waveSizeAttr->getSize() != pAttr->getSize()) {
-          S.Diag(A.getLoc(), diag::err_hlsl_conflicting_shader_attribute)
-              << pAttr->getSpelling() << waveSizeAttr->getSpelling();
-          S.Diag(waveSizeAttr->getLocation(), diag::note_conflicting_attribute);
-        }
-      }
-      return pAttr;
-    }
-
-    HLSLMaxRecordsSharedWithAttr *ValidateMaxRecordsSharedWithAttributes(
-        Sema & S, Decl * D, const AttributeList &A) {
-
-      if (!A.isArgIdent(0)) {
-        S.Diag(A.getLoc(), diag::err_attribute_argument_n_type)
-            << A.getName() << 1 << AANT_ArgumentIdentifier;
-        return nullptr;
-      }
-
-      IdentifierInfo *II = A.getArgAsIdent(0)->Ident;
-      StringRef sharedName = II->getName();
-
-      HLSLMaxRecordsAttr *ExistingMRA = D->getAttr<HLSLMaxRecordsAttr>();
-      HLSLMaxRecordsSharedWithAttr *ExistingMRSWA =
-          D->getAttr<HLSLMaxRecordsSharedWithAttr>();
-
-      ParmVarDecl *pPVD = cast<ParmVarDecl>(D);
-      StringRef ArgName = pPVD->getName();
-
-      // check that this is the only MaxRecords* attribute for this parameter
-      if (ExistingMRA || ExistingMRSWA) {
-        // only emit a diagnostic if the argument to the attribute differs from
-        // the current attribute when an extra MRSWA attribute is attached to
-        // this parameter
-        if (ExistingMRA ||
-            sharedName !=
-                ExistingMRSWA->getName()
-                    ->getName()) { // won't null deref, because short-circuit
-          clang::SourceLocation Loc = ExistingMRA
-                                          ? ExistingMRA->getLocation()
-                                          : ExistingMRSWA->getLocation();
-          S.Diag(A.getLoc(), diag::err_hlsl_maxrecord_attrs_on_same_arg);
-          S.Diag(A.getLoc(), diag::note_conflicting_attribute);
-          S.Diag(Loc, diag::note_conflicting_attribute);
-          return nullptr;
-        }
-      }
-
-      // check that the parameter that MaxRecordsSharedWith is targeting isn't
-      // applied to that exact parameter
-      if (sharedName == ArgName) {
-        S.Diag(A.getLoc(),
-               diag::err_hlsl_maxrecordssharedwith_references_itself);
-        return nullptr;
-      }
-
-      return ::new (S.Context) HLSLMaxRecordsSharedWithAttr(
-          A.getRange(), S.Context, II, A.getAttributeSpellingListIndex());
-    }
-
-    void Sema::DiagnoseHLSLDeclAttr(const Decl *D, const Attr *A) {
-      HLSLExternalSource *ExtSource = HLSLExternalSource::FromSema(this);
-      if (const HLSLGloballyCoherentAttr *HLSLGCAttr =
-              dyn_cast<HLSLGloballyCoherentAttr>(A)) {
-        const ValueDecl *TD = cast<ValueDecl>(D);
-        if (TD->getType()->isDependentType())
-          return;
-        QualType DeclType = TD->getType();
-        if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(TD))
-          DeclType = FD->getReturnType();
-        while (DeclType->isArrayType())
-          DeclType = QualType(DeclType->getArrayElementTypeNoTypeQual(), 0);
-        if (ExtSource->GetTypeObjectKind(DeclType) != AR_TOBJ_OBJECT ||
-            hlsl::GetResourceClassForType(getASTContext(), DeclType) !=
-                hlsl::DXIL::ResourceClass::UAV) {
-          Diag(A->getLocation(), diag::err_hlsl_varmodifierna)
-              << A << "non-UAV type";
-        }
-        return;
-      }
-    }
-
-    void Sema::DiagnoseGloballyCoherentMismatch(
-        const Expr *SrcExpr, QualType TargetType, SourceLocation Loc) {
-      QualType SrcTy = SrcExpr->getType();
-      QualType DstTy = TargetType;
-      if (SrcTy->isArrayType() && DstTy->isArrayType()) {
-        SrcTy = QualType(SrcTy->getBaseElementTypeUnsafe(), 0);
-        DstTy = QualType(DstTy->getBaseElementTypeUnsafe(), 0);
-      }
-      if (hlsl::IsHLSLResourceType(DstTy) &&
-          !hlsl::IsHLSLDynamicResourceType(SrcTy)) {
-        bool SrcGL = hlsl::HasHLSLGloballyCoherent(SrcTy);
-        bool DstGL = hlsl::HasHLSLGloballyCoherent(DstTy);
-        if (SrcGL != DstGL)
-          Diag(Loc, diag::warn_hlsl_impcast_glc_mismatch)
-              << SrcExpr->getType() << TargetType << /*loses|adds*/ DstGL;
-      }
-    }
-
-    void ValidateDispatchGridValues(DiagnosticsEngine & Diags,
-                                    const AttributeList &A, Attr *declAttr) {
-      unsigned x = 1, y = 1, z = 1;
-      if (HLSLNodeDispatchGridAttr *pA =
-              dyn_cast<HLSLNodeDispatchGridAttr>(declAttr)) {
-        x = pA->getX();
-        y = pA->getY();
-        z = pA->getZ();
-      } else if (HLSLNodeMaxDispatchGridAttr *pA =
-                     dyn_cast<HLSLNodeMaxDispatchGridAttr>(declAttr)) {
-        x = pA->getX();
-        y = pA->getY();
-        z = pA->getZ();
-      } else {
-        llvm_unreachable(
-            "ValidateDispatchGridValues() called for wrong attribute");
-      }
-      static const unsigned MaxComponentValue = 65535;  // 2^16 - 1
-      static const unsigned MaxProductValue = 16777215; // 2^24 - 1
-      // If a component is out of range, we reset it to 0 to avoid also
-      // generating a secondary error if the product would be out of range
-      if (x < 1 || x > MaxComponentValue) {
-        Diags.Report(A.getArgAsExpr(0)->getExprLoc(),
-                     diag::err_hlsl_dispatchgrid_component)
-            << A.getName() << "X" << A.getRange();
-        x = 0;
-      }
-      if (y < 1 || y > MaxComponentValue) {
-        Diags.Report(A.getArgAsExpr(1)->getExprLoc(),
-                     diag::err_hlsl_dispatchgrid_component)
-            << A.getName() << "Y" << A.getRange();
-        y = 0;
-      }
-      if (z < 1 || z > MaxComponentValue) {
-        Diags.Report(A.getArgAsExpr(2)->getExprLoc(),
-                     diag::err_hlsl_dispatchgrid_component)
-            << A.getName() << "Z" << A.getRange();
-        z = 0;
-      }
-      if (x * y * z > MaxProductValue)
-        Diags.Report(A.getLoc(), diag::err_hlsl_dispatchgrid_product)
-            << A.getName() << A.getRange();
-    }
-
-    void hlsl::HandleDeclAttributeForHLSL(
-        Sema & S, Decl * D, const AttributeList &A, bool &Handled) {
-      DXASSERT_NOMSG(D != nullptr);
-      DXASSERT_NOMSG(!A.isInvalid());
-
-      Attr *declAttr = nullptr;
-      Handled = true;
-      switch (A.getKind()) {
-      case AttributeList::AT_HLSLIn:
-        declAttr = ::new (S.Context) HLSLInAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLOut:
-        declAttr = ::new (S.Context) HLSLOutAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLInOut:
-        declAttr = ::new (S.Context) HLSLInOutAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLMaybeUnused:
-        declAttr = ::new (S.Context) HLSLMaybeUnusedAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-
-      case AttributeList::AT_HLSLNoInterpolation:
-        declAttr = ::new (S.Context) HLSLNoInterpolationAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLLinear:
-      case AttributeList::AT_HLSLCenter:
-        declAttr = ::new (S.Context) HLSLLinearAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNoPerspective:
-        declAttr = ::new (S.Context) HLSLNoPerspectiveAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLSample:
-        declAttr = ::new (S.Context) HLSLSampleAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLCentroid:
-        declAttr = ::new (S.Context) HLSLCentroidAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-
-      case AttributeList::AT_HLSLPrecise:
-        declAttr = ::new (S.Context) HLSLPreciseAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLShared:
-        declAttr = ::new (S.Context) HLSLSharedAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLGroupShared:
-        declAttr = ::new (S.Context) HLSLGroupSharedAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
-          VD->setType(S.Context.getAddrSpaceQualType(VD->getType(),
-                                                     DXIL::kTGSMAddrSpace));
-        }
-        break;
-      case AttributeList::AT_HLSLUniform:
-        declAttr = ::new (S.Context) HLSLUniformAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-
-      case AttributeList::AT_HLSLUnorm:
-        declAttr = ::new (S.Context) HLSLUnormAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLSnorm:
-        declAttr = ::new (S.Context) HLSLSnormAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-
-      case AttributeList::AT_HLSLPoint:
-        declAttr = ::new (S.Context) HLSLPointAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLLine:
-        declAttr = ::new (S.Context) HLSLLineAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLLineAdj:
-        declAttr = ::new (S.Context) HLSLLineAdjAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLTriangle:
-        declAttr = ::new (S.Context) HLSLTriangleAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLTriangleAdj:
-        declAttr = ::new (S.Context) HLSLTriangleAdjAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLGloballyCoherent:
-        declAttr = ::new (S.Context) HLSLGloballyCoherentAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLIndices:
-        declAttr = ::new (S.Context) HLSLIndicesAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLVertices:
-        declAttr = ::new (S.Context) HLSLVerticesAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLPrimitives:
-        declAttr = ::new (S.Context) HLSLPrimitivesAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLPayload:
-        declAttr = ::new (S.Context) HLSLPayloadAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLRayPayload:
-        declAttr = ::new (S.Context) HLSLRayPayloadAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLMaxRecords:
-        declAttr = ValidateMaxRecordsAttributes(S, D, A);
-        if (!declAttr) {
-          return;
-        }
-
-        break;
-      case AttributeList::AT_HLSLMaxRecordsSharedWith: {
-        declAttr = ValidateMaxRecordsSharedWithAttributes(S, D, A);
-        if (!declAttr) {
-          return;
-        }
-        break;
-      }
-      case AttributeList::AT_HLSLNodeArraySize: {
-        declAttr = ::new (S.Context) HLSLNodeArraySizeAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      }
-      case AttributeList::AT_HLSLAllowSparseNodes:
-        declAttr = ::new (S.Context) HLSLAllowSparseNodesAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNodeId:
-        declAttr = ::new (S.Context)
-            HLSLNodeIdAttr(A.getRange(), S.Context,
-                           ValidateAttributeStringArg(S, A, nullptr, 0),
-                           ValidateAttributeIntArg(S, A, 1),
-                           A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNodeTrackRWInputSharing:
-        declAttr = ::new (S.Context) HLSLNodeTrackRWInputSharingAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      // SPIRV Change Starts
-      case AttributeList::AT_VKDecorateIdExt: {
-        if (A.getNumArgs() == 0 || !A.getArg(0).is<clang::Expr *>()) {
-          Handled = false;
-          break;
-        }
-
-        unsigned decoration = 0;
-        if (IntegerLiteral *decorationAsLiteral =
-                dyn_cast<IntegerLiteral>(A.getArg(0).get<clang::Expr *>())) {
-          decoration = decorationAsLiteral->getValue().getZExtValue();
-        } else {
-          Handled = false;
-          break;
-        }
-
-        llvm::SmallVector<Expr *, 2> args;
-        for (unsigned i = 1; i < A.getNumArgs(); ++i) {
-          if (!A.getArg(i).is<clang::Expr *>()) {
-            Handled = false;
-            break;
-          }
-          args.push_back(A.getArg(i).get<clang::Expr *>());
-        }
-        if (!Handled)
-          break;
-        declAttr = ::new (S.Context) VKDecorateIdExtAttr(
-            A.getRange(), S.Context, decoration, args.data(), args.size(),
-            A.getAttributeSpellingListIndex());
-      } break;
-        // SPIRV Change Ends
-
-      default:
-        Handled = false;
-        break;
-      }
-
-      if (declAttr != nullptr) {
-        S.DiagnoseHLSLDeclAttr(D, declAttr);
-        DXASSERT_NOMSG(Handled);
-        D->addAttr(declAttr);
-        return;
-      }
-
-      Handled = true;
-      switch (A.getKind()) {
-      // These apply to statements, not declarations. The warning messages
-      // clarify this properly.
-      case AttributeList::AT_HLSLUnroll:
-      case AttributeList::AT_HLSLAllowUAVCondition:
-      case AttributeList::AT_HLSLLoop:
-      case AttributeList::AT_HLSLFastOpt:
-        S.Diag(A.getLoc(),
-               diag::warn_hlsl_unsupported_statement_for_loop_attribute)
-            << A.getName();
-        return;
-      case AttributeList::AT_HLSLBranch:
-      case AttributeList::AT_HLSLFlatten:
-        S.Diag(A.getLoc(),
-               diag::warn_hlsl_unsupported_statement_for_if_switch_attribute)
-            << A.getName();
-        return;
-      case AttributeList::AT_HLSLForceCase:
-      case AttributeList::AT_HLSLCall:
-        S.Diag(A.getLoc(),
-               diag::warn_hlsl_unsupported_statement_for_switch_attribute)
-            << A.getName();
-        return;
-
-      // These are the cases that actually apply to declarations.
-      case AttributeList::AT_HLSLClipPlanes:
-        declAttr = HandleClipPlanes(S, A);
-        break;
-      case AttributeList::AT_HLSLDomain:
-        declAttr = ::new (S.Context)
-            HLSLDomainAttr(A.getRange(), S.Context,
-                           ValidateAttributeStringArg(S, A, "tri,quad,isoline"),
-                           A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLEarlyDepthStencil:
-        declAttr = ::new (S.Context) HLSLEarlyDepthStencilAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLInstance:
-        declAttr = ::new (S.Context) HLSLInstanceAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLMaxTessFactor:
-        declAttr = ::new (S.Context) HLSLMaxTessFactorAttr(
-            A.getRange(), S.Context, ValidateAttributeFloatArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNumThreads: {
-        auto numThreads = ::new (S.Context) HLSLNumThreadsAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            ValidateAttributeIntArg(S, A, 1), ValidateAttributeIntArg(S, A, 2),
-            A.getAttributeSpellingListIndex());
-        if (numThreads->getX() * numThreads->getY() * numThreads->getZ() > 1024)
-          S.Diags.Report(numThreads->getLocation(),
-                         diag::err_hlsl_numthreads_group_size)
-              << numThreads->getRange();
-        declAttr = numThreads;
-        break;
-      }
-      case AttributeList::AT_HLSLRootSignature:
-        declAttr = ::new (S.Context) HLSLRootSignatureAttr(
-            A.getRange(), S.Context,
-            ValidateAttributeStringArg(S, A, /*validate strings*/ nullptr),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLOutputControlPoints:
-        declAttr = ::new (S.Context) HLSLOutputControlPointsAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLOutputTopology:
-        declAttr = ::new (S.Context) HLSLOutputTopologyAttr(
-            A.getRange(), S.Context,
-            ValidateAttributeStringArg(
-                S, A, "point,line,triangle,triangle_cw,triangle_ccw"),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLPartitioning:
-        declAttr = ::new (S.Context) HLSLPartitioningAttr(
-            A.getRange(), S.Context,
-            ValidateAttributeStringArg(
-                S, A, "integer,fractional_even,fractional_odd,pow2"),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLPatchConstantFunc:
-        declAttr = ::new (S.Context) HLSLPatchConstantFuncAttr(
-            A.getRange(), S.Context, ValidateAttributeStringArg(S, A, nullptr),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLShader:
-        declAttr = ValidateShaderAttributes(S, D, A);
-        if (!declAttr) {
-          Handled = true;
-          return;
-        }
-        break;
-      case AttributeList::AT_HLSLMaxVertexCount:
-        declAttr = ::new (S.Context) HLSLMaxVertexCountAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLExperimental:
-        declAttr = ::new (S.Context)
-            HLSLExperimentalAttr(A.getRange(), S.Context,
-                                 ValidateAttributeStringArg(S, A, nullptr, 0),
-                                 ValidateAttributeStringArg(S, A, nullptr, 1),
-                                 A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_NoInline:
-        declAttr = ::new (S.Context) NoInlineAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLExport:
-        declAttr = ::new (S.Context) HLSLExportAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLWaveSensitive:
-        declAttr = ::new (S.Context) HLSLWaveSensitiveAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLWaveSize:
-        declAttr = ValidateWaveSizeAttributes(S, D, A);
-        break;
-      case AttributeList::AT_HLSLWaveOpsIncludeHelperLanes:
-        declAttr = ::new (S.Context) HLSLWaveOpsIncludeHelperLanesAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNodeLaunch:
-        declAttr = ::new (S.Context) HLSLNodeLaunchAttr(
-            A.getRange(), S.Context,
-            ValidateAttributeStringArg(S, A, "broadcasting,coalescing,thread"),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNodeIsProgramEntry:
-        declAttr = ::new (S.Context) HLSLNodeIsProgramEntryAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNodeTrackRWInputSharing:
-        declAttr = ::new (S.Context) HLSLNodeTrackRWInputSharingAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNodeLocalRootArgumentsTableIndex:
-        declAttr = ::new (S.Context) HLSLNodeLocalRootArgumentsTableIndexAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNodeShareInputOf:
-        declAttr = ::new (S.Context) HLSLNodeShareInputOfAttr(
-            A.getRange(), S.Context,
-            ValidateAttributeStringArg(S, A, nullptr, 0),
-            ValidateAttributeIntArg(S, A, 1),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLNodeDispatchGrid:
-        declAttr = ::new (S.Context) HLSLNodeDispatchGridAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            ValidateAttributeIntArg(S, A, 1), ValidateAttributeIntArg(S, A, 2),
-            A.getAttributeSpellingListIndex());
-        ValidateDispatchGridValues(S.Diags, A, declAttr);
-        break;
-      case AttributeList::AT_HLSLNodeMaxDispatchGrid:
-        declAttr = ::new (S.Context) HLSLNodeMaxDispatchGridAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            ValidateAttributeIntArg(S, A, 1), ValidateAttributeIntArg(S, A, 2),
-            A.getAttributeSpellingListIndex());
-        ValidateDispatchGridValues(S.Diags, A, declAttr);
-        break;
-      case AttributeList::AT_HLSLNodeMaxRecursionDepth:
-        declAttr = ::new (S.Context) HLSLNodeMaxRecursionDepthAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        if (cast<HLSLNodeMaxRecursionDepthAttr>(declAttr)->getCount() > 32)
-          S.Diags.Report(declAttr->getLocation(),
-                         diag::err_hlsl_maxrecursiondepth_exceeded)
-              << declAttr->getRange();
-        break;
-      default:
-        Handled = false;
-        break; // SPIRV Change: was return;
-      }
-
-      if (declAttr != nullptr) {
-        DXASSERT_NOMSG(Handled);
-        D->addAttr(declAttr);
-
-        // The attribute has been set but will have no effect. Validation will
-        // emit a diagnostic and prevent code generation.
-        ValidateAttributeTargetIsFunction(S, D, A);
-
-        return; // SPIRV Change
-      }
-
-      // SPIRV Change Starts
-      Handled = true;
-      switch (A.getKind()) {
-      case AttributeList::AT_VKBuiltIn:
-        declAttr = ::new (S.Context) VKBuiltInAttr(
-            A.getRange(), S.Context,
-            ValidateAttributeStringArg(
-                S, A,
-                "PointSize,HelperInvocation,BaseVertex,BaseInstance,"
-                "DrawIndex,DeviceIndex,ViewportMaskNV"),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKLocation:
-        declAttr = ::new (S.Context) VKLocationAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKIndex:
-        declAttr = ::new (S.Context)
-            VKIndexAttr(A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-                        A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKBinding:
-        declAttr = ::new (S.Context) VKBindingAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getNumArgs() < 2 ? INT_MIN : ValidateAttributeIntArg(S, A, 1),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKCounterBinding:
-        declAttr = ::new (S.Context) VKCounterBindingAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKPushConstant:
-        declAttr = ::new (S.Context) VKPushConstantAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKOffset:
-        declAttr = ::new (S.Context)
-            VKOffsetAttr(A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-                         A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKCombinedImageSampler:
-        declAttr = ::new (S.Context) VKCombinedImageSamplerAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKImageFormat: {
-        VKImageFormatAttr::ImageFormatType Kind = ValidateAttributeEnumArg<
-            VKImageFormatAttr, VKImageFormatAttr::ImageFormatType,
-            VKImageFormatAttr::ConvertStrToImageFormatType>(
-            S, A, VKImageFormatAttr::ImageFormatType::unknown);
-        declAttr = ::new (S.Context) VKImageFormatAttr(
-            A.getRange(), S.Context, Kind, A.getAttributeSpellingListIndex());
-        break;
-      }
-      case AttributeList::AT_VKInputAttachmentIndex:
-        declAttr = ::new (S.Context) VKInputAttachmentIndexAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKConstantId:
-        declAttr = ::new (S.Context) VKConstantIdAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKPostDepthCoverage:
-        declAttr = ::new (S.Context) VKPostDepthCoverageAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKEarlyAndLateTests:
-        declAttr = ::new (S.Context) VKEarlyAndLateTestsAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKDepthUnchanged:
-        declAttr = ::new (S.Context) VKDepthUnchangedAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKStencilRefUnchangedFront:
-        declAttr = ::new (S.Context) VKStencilRefUnchangedFrontAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKStencilRefGreaterEqualFront:
-        declAttr = ::new (S.Context) VKStencilRefGreaterEqualFrontAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKStencilRefLessEqualFront:
-        declAttr = ::new (S.Context) VKStencilRefLessEqualFrontAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKStencilRefUnchangedBack:
-        declAttr = ::new (S.Context) VKStencilRefUnchangedBackAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKStencilRefGreaterEqualBack:
-        declAttr = ::new (S.Context) VKStencilRefGreaterEqualBackAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKStencilRefLessEqualBack:
-        declAttr = ::new (S.Context) VKStencilRefLessEqualBackAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKShaderRecordNV:
-        declAttr = ::new (S.Context) VKShaderRecordNVAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKShaderRecordEXT:
-        declAttr = ::new (S.Context) VKShaderRecordEXTAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKCapabilityExt:
-        declAttr = ::new (S.Context) VKCapabilityExtAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKExtensionExt:
-        declAttr = ::new (S.Context) VKExtensionExtAttr(
-            A.getRange(), S.Context, ValidateAttributeStringArg(S, A, nullptr),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKInstructionExt:
-        declAttr = ::new (S.Context) VKInstructionExtAttr(
-            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-            ValidateAttributeStringArg(S, A, nullptr, 1),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKLiteralExt:
-        declAttr = ::new (S.Context) VKLiteralExtAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKReferenceExt:
-        declAttr = ::new (S.Context) VKReferenceExtAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKDecorateExt: {
-        unsigned decoration = unsigned(ValidateAttributeIntArg(S, A));
-        llvm::SmallVector<unsigned, 2> args;
-        for (unsigned i = 1; i < A.getNumArgs(); ++i) {
-          args.push_back(unsigned(ValidateAttributeIntArg(S, A, i)));
-        }
-        // Note that `llvm::SmallVector<unsigned, 2> args` will be destroyed at
-        // the end of this function. However, VKDecorateExtAttr() constructor
-        // allocate a new integer array internally for args. It does not create
-        // a dangling pointer.
-        declAttr = ::new (S.Context)
-            VKDecorateExtAttr(A.getRange(), S.Context, decoration, args.data(),
-                              args.size(), A.getAttributeSpellingListIndex());
-      } break;
-      case AttributeList::AT_VKDecorateStringExt: {
-        unsigned decoration = unsigned(ValidateAttributeIntArg(S, A));
-        llvm::SmallVector<std::string, 2> args;
-        for (unsigned i = 1; i < A.getNumArgs(); ++i) {
-          args.push_back(ValidateAttributeStringArg(S, A, nullptr, i));
-        }
-        // Note that `llvm::SmallVector<std::string, 2> args` will be destroyed
-        // at the end of this function. However, VKDecorateExtAttr() constructor
-        // allocate a new integer array internally for args. It does not create
-        // a dangling pointer.
-        declAttr = ::new (S.Context) VKDecorateStringExtAttr(
-            A.getRange(), S.Context, decoration, args.data(), args.size(),
-            A.getAttributeSpellingListIndex());
-      } break;
-      case AttributeList::AT_VKStorageClassExt:
-        declAttr = ::new (S.Context) VKStorageClassExtAttr(
-            A.getRange(), S.Context, unsigned(ValidateAttributeIntArg(S, A)),
-            A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_VKTypeDefExt:
-        declAttr = ::new (S.Context) VKTypeDefExtAttr(
-            A.getRange(), S.Context, unsigned(ValidateAttributeIntArg(S, A)),
-            unsigned(ValidateAttributeIntArg(S, A, 1)),
-            A.getAttributeSpellingListIndex());
-        break;
-      default:
-        Handled = false;
-        return;
-      }
-
-      if (declAttr != nullptr) {
-        DXASSERT_NOMSG(Handled);
-        D->addAttr(declAttr);
-      }
-      // SPIRV Change Ends
-    }
-
-    /// <summary>Processes an attribute for a statement.</summary>
-    /// <param name="S">Sema with context.</param>
-    /// <param name="St">Statement annotated.</param>
-    /// <param name="A">Single parsed attribute to process.</param>
-    /// <param name="Range">Range of all attribute lists (useful for FixIts to
-    /// suggest inclusions).</param> <param name="Handled">After execution,
-    /// whether this was recognized and handled.</param> <returns>An attribute
-    /// instance if processed, nullptr if not recognized or an error was
-    /// found.</returns>
-    Attr *hlsl::ProcessStmtAttributeForHLSL(Sema & S, Stmt * St,
-                                            const AttributeList &A,
-                                            SourceRange Range, bool &Handled) {
-      // | Construct        | Allowed Attributes                         |
-      // +------------------+--------------------------------------------+
-      // | for, while, do   | loop, fastopt, unroll, allow_uav_condition |
-      // | if               | branch, flatten                            |
-      // | switch           | branch, flatten, forcecase, call           |
-
-      Attr *result = nullptr;
-      Handled = true;
-
-      // SPIRV Change Starts
-      if (A.hasScope() && A.getScopeName()->getName().equals("vk")) {
-        switch (A.getKind()) {
-        case AttributeList::AT_VKCapabilityExt:
-          return ::new (S.Context) VKCapabilityExtAttr(
-              A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
-              A.getAttributeSpellingListIndex());
-        case AttributeList::AT_VKExtensionExt:
-          return ::new (S.Context)
-              VKExtensionExtAttr(A.getRange(), S.Context,
-                                 ValidateAttributeStringArg(S, A, nullptr),
-                                 A.getAttributeSpellingListIndex());
-        default:
-          Handled = false;
-          return nullptr;
-        }
-      }
-      // SPIRV Change Ends
-
-      switch (A.getKind()) {
-      case AttributeList::AT_HLSLUnroll:
-        ValidateAttributeOnLoop(S, St, A);
-        result = HandleUnrollAttribute(S, A);
-        break;
-      case AttributeList::AT_HLSLAllowUAVCondition:
-        ValidateAttributeOnLoop(S, St, A);
-        result = ::new (S.Context) HLSLAllowUAVConditionAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLLoop:
-        ValidateAttributeOnLoop(S, St, A);
-        result = ::new (S.Context) HLSLLoopAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLFastOpt:
-        ValidateAttributeOnLoop(S, St, A);
-        result = ::new (S.Context) HLSLFastOptAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLBranch:
-        ValidateAttributeOnSwitchOrIf(S, St, A);
-        result = ::new (S.Context) HLSLBranchAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLFlatten:
-        ValidateAttributeOnSwitchOrIf(S, St, A);
-        result = ::new (S.Context) HLSLFlattenAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLForceCase:
-        ValidateAttributeOnSwitch(S, St, A);
-        result = ::new (S.Context) HLSLForceCaseAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      case AttributeList::AT_HLSLCall:
-        ValidateAttributeOnSwitch(S, St, A);
-        result = ::new (S.Context) HLSLCallAttr(
-            A.getRange(), S.Context, A.getAttributeSpellingListIndex());
-        break;
-      default:
-        Handled = false;
-        break;
-      }
-
+    // Return result with no additional validation.
+    if (values == nullptr) {
       return result;
     }
 
-    ////////////////////////////////////////////////////////////////////////////////
-    // Implementation of Sema members. //
+    const char *value = values;
+    while (*value != '\0') {
+      DXASSERT_NOMSG(*value != ','); // no leading commas in values
 
-    Decl *Sema::ActOnStartHLSLBuffer(
-        Scope * bufferScope, bool cbuffer, SourceLocation KwLoc,
-        IdentifierInfo *Ident, SourceLocation IdentLoc,
-        std::vector<hlsl::UnusualAnnotation *> &BufferAttributes,
-        SourceLocation LBrace) {
-      // For anonymous namespace, take the location of the left brace.
-      DeclContext *lexicalParent = getCurLexicalContext();
-      clang::HLSLBufferDecl *result = HLSLBufferDecl::Create(
-          Context, lexicalParent, cbuffer, /*isConstantBufferView*/ false,
-          KwLoc, Ident, IdentLoc, BufferAttributes, LBrace);
+      // Look for a match.
+      const char *argData = result.data();
+      size_t argDataLen = result.size();
 
-      // Keep track of the currently active buffer.
-      HLSLBuffers.push_back(result);
-
-      // Validate unusual annotations and emit diagnostics.
-      DiagnoseUnusualAnnotationsForHLSL(*this, BufferAttributes);
-      auto &&unusualIter = BufferAttributes.begin();
-      auto &&unusualEnd = BufferAttributes.end();
-      char expectedRegisterType = cbuffer ? 'b' : 't';
-      for (; unusualIter != unusualEnd; ++unusualIter) {
-        switch ((*unusualIter)->getKind()) {
-        case hlsl::UnusualAnnotation::UA_ConstantPacking: {
-          hlsl::ConstantPacking *constantPacking =
-              cast<hlsl::ConstantPacking>(*unusualIter);
-          Diag(constantPacking->Loc,
-               diag::err_hlsl_unsupported_buffer_packoffset);
-          break;
-        }
-        case hlsl::UnusualAnnotation::UA_RegisterAssignment: {
-          hlsl::RegisterAssignment *registerAssignment =
-              cast<hlsl::RegisterAssignment>(*unusualIter);
-
-          if (registerAssignment->isSpaceOnly())
-            continue;
-
-          if (registerAssignment->RegisterType != expectedRegisterType &&
-              registerAssignment->RegisterType !=
-                  toupper(expectedRegisterType)) {
-            Diag(registerAssignment->Loc,
-                 diag::err_hlsl_incorrect_bind_semantic)
-                << (cbuffer ? "'b'" : "'t'");
-          } else if (registerAssignment->ShaderProfile.size() > 0) {
-            Diag(registerAssignment->Loc,
-                 diag::err_hlsl_unsupported_buffer_slot_target_specific);
-          }
-          break;
-        }
-        case hlsl::UnusualAnnotation::UA_SemanticDecl: {
-          // Ignore semantic declarations.
-          break;
-        }
-        case hlsl::UnusualAnnotation::UA_PayloadAccessQualifier: {
-          hlsl::PayloadAccessAnnotation *annotation =
-              cast<hlsl::PayloadAccessAnnotation>(*unusualIter);
-          Diag(annotation->Loc,
-               diag::err_hlsl_unsupported_payload_access_qualifier);
-          break;
-        }
-        }
+      while (argDataLen != 0 && *argData == *value && *value) {
+        ++argData;
+        ++value;
+        --argDataLen;
       }
 
-      PushOnScopeChains(result, bufferScope);
-      PushDeclContext(bufferScope, result);
-
-      ActOnDocumentableDecl(result);
-
-      return result;
-    }
-
-    void Sema::ActOnFinishHLSLBuffer(Decl * Dcl, SourceLocation RBrace) {
-      DXASSERT_NOMSG(Dcl != nullptr);
-      DXASSERT(Dcl == HLSLBuffers.back(), "otherwise push/pop is incorrect");
-      dyn_cast<HLSLBufferDecl>(Dcl)->setRBraceLoc(RBrace);
-      HLSLBuffers.pop_back();
-      PopDeclContext();
-    }
-
-    Decl *Sema::getActiveHLSLBuffer() const {
-      return HLSLBuffers.empty() ? nullptr : HLSLBuffers.back();
-    }
-
-    bool Sema::IsOnHLSLBufferView() {
-      // nullptr will not pushed for cbuffer.
-      return !HLSLBuffers.empty() && getActiveHLSLBuffer() == nullptr;
-    }
-    HLSLBufferDecl::HLSLBufferDecl(
-        DeclContext * DC, bool cbuffer, bool cbufferView, SourceLocation KwLoc,
-        IdentifierInfo *Id, SourceLocation IdLoc,
-        std::vector<hlsl::UnusualAnnotation *> &BufferAttributes,
-        SourceLocation LBrace)
-        : NamedDecl(Decl::HLSLBuffer, DC, IdLoc, DeclarationName(Id)),
-          DeclContext(Decl::HLSLBuffer), LBraceLoc(LBrace), KwLoc(KwLoc),
-          IsCBuffer(cbuffer), IsConstantBufferView(cbufferView) {
-      if (!BufferAttributes.empty()) {
-        setUnusualAnnotations(UnusualAnnotation::CopyToASTContextArray(
-            getASTContext(), BufferAttributes.data(), BufferAttributes.size()));
-      }
-    }
-
-    HLSLBufferDecl *HLSLBufferDecl::Create(
-        ASTContext & C, DeclContext * lexicalParent, bool cbuffer,
-        bool constantbuffer, SourceLocation KwLoc, IdentifierInfo *Id,
-        SourceLocation IdLoc,
-        std::vector<hlsl::UnusualAnnotation *> &BufferAttributes,
-        SourceLocation LBrace) {
-      DeclContext *DC = C.getTranslationUnitDecl();
-      HLSLBufferDecl *result =
-          ::new (C) HLSLBufferDecl(DC, cbuffer, constantbuffer, KwLoc, Id,
-                                   IdLoc, BufferAttributes, LBrace);
-      if (DC != lexicalParent) {
-        result->setLexicalDeclContext(lexicalParent);
+      // Match found if every input character matched.
+      if (argDataLen == 0 && (*value == '\0' || *value == ',')) {
+        return result;
       }
 
-      return result;
-    }
-
-    const char *HLSLBufferDecl::getDeclKindName() const {
-      static const char *HLSLBufferNames[] = {
-          "tbuffer", "cbuffer", "TextureBuffer", "ConstantBuffer"};
-      unsigned index = (unsigned)isCBuffer() | (isConstantBufferView()) << 1;
-      return HLSLBufferNames[index];
-    }
-
-    void Sema::TransferUnusualAttributes(Declarator & D, NamedDecl * NewDecl) {
-      assert(NewDecl != nullptr);
-
-      if (!getLangOpts().HLSL) {
-        return;
+      // Move to next separator.
+      while (*value != '\0' && *value != ',') {
+        ++value;
       }
 
-      if (!D.UnusualAnnotations.empty()) {
-        NewDecl->setUnusualAnnotations(UnusualAnnotation::CopyToASTContextArray(
-            getASTContext(), D.UnusualAnnotations.data(),
-            D.UnusualAnnotations.size()));
-        D.UnusualAnnotations.clear();
-      }
+      // Move to the start of the next item if any.
+      if (*value == ',')
+        value++;
     }
 
-    /// Checks whether a usage attribute is compatible with those seen so far
-    /// and maintains history.
-    static bool IsUsageAttributeCompatible(AttributeList::Kind kind,
-                                           bool &usageIn, bool &usageOut) {
-      switch (kind) {
-      case AttributeList::AT_HLSLIn:
-        if (usageIn)
-          return false;
-        usageIn = true;
-        break;
-      case AttributeList::AT_HLSLOut:
-        if (usageOut)
-          return false;
-        usageOut = true;
-        break;
-      default:
-        assert(kind == AttributeList::AT_HLSLInOut);
-        if (usageOut || usageIn)
-          return false;
-        usageIn = usageOut = true;
-        break;
-      }
+    DXASSERT_NOMSG(*value == '\0'); // no other terminating conditions
+
+    // No match found.
+    S.Diag(E->getLocStart(),
+           diag::err_hlsl_attribute_expects_string_literal_from_list)
+        << A.getName() << values;
+    return StringRef();
+  }
+
+  static bool ValidateAttributeTargetIsFunction(Sema & S, Decl * D,
+                                                const AttributeList &A) {
+    if (D->isFunctionOrFunctionTemplate()) {
       return true;
     }
 
-    // Diagnose valid/invalid modifiers for HLSL.
-    bool Sema::DiagnoseHLSLDecl(Declarator & D, DeclContext * DC,
-                                Expr * BitWidth, TypeSourceInfo * TInfo,
-                                bool isParameter) {
-      assert(getLangOpts().HLSL &&
-             "otherwise this is called without checking language first");
+    S.Diag(A.getLoc(), diag::err_hlsl_attribute_valid_on_function_only);
+    return false;
+  }
 
-      // If we have a template declaration but haven't enabled templates, error.
-      if (DC->isDependentContext() &&
-          getLangOpts().HLSLVersion < hlsl::LangStd::v2021)
+  HLSLShaderAttr *ValidateShaderAttributes(Sema & S, Decl * D,
+                                           const AttributeList &A) {
+    Expr *ArgExpr = A.getArgAsExpr(0);
+    StringLiteral *Literal =
+        dyn_cast<StringLiteral>(ArgExpr->IgnoreParenCasts());
+    DXIL::ShaderKind Stage =
+        ShaderModel::KindFromFullName(Literal->getString());
+    if (Stage == DXIL::ShaderKind::Invalid) {
+      S.Diag(A.getLoc(),
+             diag::err_hlsl_attribute_expects_string_literal_from_list)
+          << "'shader'"
+          << "compute,vertex,pixel,hull,domain,geometry,raygeneration,"
+             "intersection,anyhit,closesthit,miss,callable,mesh,"
+             "amplification,node";
+      return nullptr; // don't create the attribute
+    }
+
+    HLSLShaderAttr *Existing = D->getAttr<HLSLShaderAttr>();
+    if (Existing) {
+      DXIL::ShaderKind NewStage =
+          ShaderModel::KindFromFullName(Existing->getStage());
+      if (Stage == NewStage)
+        return nullptr; // don't create, but no error.
+      else {
+        S.Diag(A.getLoc(), diag::err_hlsl_conflicting_shader_attribute)
+            << ShaderModel::FullNameFromKind(Stage)
+            << ShaderModel::FullNameFromKind(NewStage);
+        S.Diag(Existing->getLocation(), diag::note_conflicting_attribute);
+        return nullptr;
+      }
+    }
+    return ::new (S.Context)
+        HLSLShaderAttr(A.getRange(), S.Context, Literal->getString(),
+                       A.getAttributeSpellingListIndex());
+  }
+
+  HLSLMaxRecordsAttr *ValidateMaxRecordsAttributes(Sema & S, Decl * D,
+                                                   const AttributeList &A) {
+
+    HLSLMaxRecordsAttr *ExistingMRA = D->getAttr<HLSLMaxRecordsAttr>();
+    HLSLMaxRecordsSharedWithAttr *ExistingMRSWA =
+        D->getAttr<HLSLMaxRecordsSharedWithAttr>();
+
+    if (ExistingMRA || ExistingMRSWA) {
+      Expr *ArgExpr = A.getArgAsExpr(0);
+      IntegerLiteral *LiteralInt =
+          dyn_cast<IntegerLiteral>(ArgExpr->IgnoreParenCasts());
+
+      if (ExistingMRSWA ||
+          ExistingMRA->getMaxCount() != LiteralInt->getValue()) {
+        clang::SourceLocation Loc = ExistingMRA ? ExistingMRA->getLocation()
+                                                : ExistingMRSWA->getLocation();
+        S.Diag(A.getLoc(), diag::err_hlsl_maxrecord_attrs_on_same_arg);
+        S.Diag(A.getLoc(), diag::note_conflicting_attribute);
+        S.Diag(Loc, diag::note_conflicting_attribute);
+        return nullptr;
+      }
+    }
+
+    return ::new (S.Context) HLSLMaxRecordsAttr(
+        A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+        A.getAttributeSpellingListIndex());
+  }
+
+  // This function validates the wave size attribute in a stand-alone way,
+  // by directly determining whether the attribute is well formed or
+  // allowed. It performs validation outside of the context
+  // of other attributes that could exist on this decl, and immediately
+  // upon detecting the attribute on the decl.
+  HLSLWaveSizeAttr *ValidateWaveSizeAttributes(Sema & S, Decl * D,
+                                               const AttributeList &A) {
+    // validate that the wavesize argument is a power of 2 between 4 and 128
+    // inclusive
+    HLSLWaveSizeAttr *pAttr = ::new (S.Context)
+        HLSLWaveSizeAttr(A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+                         A.getAttributeSpellingListIndex());
+
+    unsigned waveSize = pAttr->getSize();
+    if (!DXIL::IsValidWaveSizeValue(waveSize)) {
+      S.Diag(A.getLoc(), diag::err_hlsl_wavesize_size)
+          << DXIL::kMinWaveSize << DXIL::kMaxWaveSize;
+    }
+
+    // make sure there is not already an existing conflicting
+    // wavesize attribute on the decl
+    HLSLWaveSizeAttr *waveSizeAttr = D->getAttr<HLSLWaveSizeAttr>();
+    if (waveSizeAttr) {
+      if (waveSizeAttr->getSize() != pAttr->getSize()) {
+        S.Diag(A.getLoc(), diag::err_hlsl_conflicting_shader_attribute)
+            << pAttr->getSpelling() << waveSizeAttr->getSpelling();
+        S.Diag(waveSizeAttr->getLocation(), diag::note_conflicting_attribute);
+      }
+    }
+    return pAttr;
+  }
+
+  HLSLMaxRecordsSharedWithAttr *ValidateMaxRecordsSharedWithAttributes(
+      Sema & S, Decl * D, const AttributeList &A) {
+
+    if (!A.isArgIdent(0)) {
+      S.Diag(A.getLoc(), diag::err_attribute_argument_n_type)
+          << A.getName() << 1 << AANT_ArgumentIdentifier;
+      return nullptr;
+    }
+
+    IdentifierInfo *II = A.getArgAsIdent(0)->Ident;
+    StringRef sharedName = II->getName();
+
+    HLSLMaxRecordsAttr *ExistingMRA = D->getAttr<HLSLMaxRecordsAttr>();
+    HLSLMaxRecordsSharedWithAttr *ExistingMRSWA =
+        D->getAttr<HLSLMaxRecordsSharedWithAttr>();
+
+    ParmVarDecl *pPVD = cast<ParmVarDecl>(D);
+    StringRef ArgName = pPVD->getName();
+
+    // check that this is the only MaxRecords* attribute for this parameter
+    if (ExistingMRA || ExistingMRSWA) {
+      // only emit a diagnostic if the argument to the attribute differs from
+      // the current attribute when an extra MRSWA attribute is attached to
+      // this parameter
+      if (ExistingMRA ||
+          sharedName !=
+              ExistingMRSWA->getName()
+                  ->getName()) { // won't null deref, because short-circuit
+        clang::SourceLocation Loc = ExistingMRA ? ExistingMRA->getLocation()
+                                                : ExistingMRSWA->getLocation();
+        S.Diag(A.getLoc(), diag::err_hlsl_maxrecord_attrs_on_same_arg);
+        S.Diag(A.getLoc(), diag::note_conflicting_attribute);
+        S.Diag(Loc, diag::note_conflicting_attribute);
+        return nullptr;
+      }
+    }
+
+    // check that the parameter that MaxRecordsSharedWith is targeting isn't
+    // applied to that exact parameter
+    if (sharedName == ArgName) {
+      S.Diag(A.getLoc(), diag::err_hlsl_maxrecordssharedwith_references_itself);
+      return nullptr;
+    }
+
+    return ::new (S.Context) HLSLMaxRecordsSharedWithAttr(
+        A.getRange(), S.Context, II, A.getAttributeSpellingListIndex());
+  }
+
+  void Sema::DiagnoseHLSLDeclAttr(const Decl *D, const Attr *A) {
+    HLSLExternalSource *ExtSource = HLSLExternalSource::FromSema(this);
+    if (const HLSLGloballyCoherentAttr *HLSLGCAttr =
+            dyn_cast<HLSLGloballyCoherentAttr>(A)) {
+      const ValueDecl *TD = cast<ValueDecl>(D);
+      if (TD->getType()->isDependentType())
+        return;
+      QualType DeclType = TD->getType();
+      if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(TD))
+        DeclType = FD->getReturnType();
+      while (DeclType->isArrayType())
+        DeclType = QualType(DeclType->getArrayElementTypeNoTypeQual(), 0);
+      if (ExtSource->GetTypeObjectKind(DeclType) != AR_TOBJ_OBJECT ||
+          hlsl::GetResourceClassForType(getASTContext(), DeclType) !=
+              hlsl::DXIL::ResourceClass::UAV) {
+        Diag(A->getLocation(), diag::err_hlsl_varmodifierna)
+            << A << "non-UAV type";
+      }
+      return;
+    }
+  }
+
+  void Sema::DiagnoseGloballyCoherentMismatch(
+      const Expr *SrcExpr, QualType TargetType, SourceLocation Loc) {
+    QualType SrcTy = SrcExpr->getType();
+    QualType DstTy = TargetType;
+    if (SrcTy->isArrayType() && DstTy->isArrayType()) {
+      SrcTy = QualType(SrcTy->getBaseElementTypeUnsafe(), 0);
+      DstTy = QualType(DstTy->getBaseElementTypeUnsafe(), 0);
+    }
+    if (hlsl::IsHLSLResourceType(DstTy) &&
+        !hlsl::IsHLSLDynamicResourceType(SrcTy)) {
+      bool SrcGL = hlsl::HasHLSLGloballyCoherent(SrcTy);
+      bool DstGL = hlsl::HasHLSLGloballyCoherent(DstTy);
+      if (SrcGL != DstGL)
+        Diag(Loc, diag::warn_hlsl_impcast_glc_mismatch)
+            << SrcExpr->getType() << TargetType << /*loses|adds*/ DstGL;
+    }
+  }
+
+  void ValidateDispatchGridValues(DiagnosticsEngine & Diags,
+                                  const AttributeList &A, Attr *declAttr) {
+    unsigned x = 1, y = 1, z = 1;
+    if (HLSLNodeDispatchGridAttr *pA =
+            dyn_cast<HLSLNodeDispatchGridAttr>(declAttr)) {
+      x = pA->getX();
+      y = pA->getY();
+      z = pA->getZ();
+    } else if (HLSLNodeMaxDispatchGridAttr *pA =
+                   dyn_cast<HLSLNodeMaxDispatchGridAttr>(declAttr)) {
+      x = pA->getX();
+      y = pA->getY();
+      z = pA->getZ();
+    } else {
+      llvm_unreachable(
+          "ValidateDispatchGridValues() called for wrong attribute");
+    }
+    static const unsigned MaxComponentValue = 65535;  // 2^16 - 1
+    static const unsigned MaxProductValue = 16777215; // 2^24 - 1
+    // If a component is out of range, we reset it to 0 to avoid also
+    // generating a secondary error if the product would be out of range
+    if (x < 1 || x > MaxComponentValue) {
+      Diags.Report(A.getArgAsExpr(0)->getExprLoc(),
+                   diag::err_hlsl_dispatchgrid_component)
+          << A.getName() << "X" << A.getRange();
+      x = 0;
+    }
+    if (y < 1 || y > MaxComponentValue) {
+      Diags.Report(A.getArgAsExpr(1)->getExprLoc(),
+                   diag::err_hlsl_dispatchgrid_component)
+          << A.getName() << "Y" << A.getRange();
+      y = 0;
+    }
+    if (z < 1 || z > MaxComponentValue) {
+      Diags.Report(A.getArgAsExpr(2)->getExprLoc(),
+                   diag::err_hlsl_dispatchgrid_component)
+          << A.getName() << "Z" << A.getRange();
+      z = 0;
+    }
+    if (x * y * z > MaxProductValue)
+      Diags.Report(A.getLoc(), diag::err_hlsl_dispatchgrid_product)
+          << A.getName() << A.getRange();
+  }
+
+  void hlsl::HandleDeclAttributeForHLSL(Sema & S, Decl * D,
+                                        const AttributeList &A, bool &Handled) {
+    DXASSERT_NOMSG(D != nullptr);
+    DXASSERT_NOMSG(!A.isInvalid());
+
+    Attr *declAttr = nullptr;
+    Handled = true;
+    switch (A.getKind()) {
+    case AttributeList::AT_HLSLIn:
+      declAttr = ::new (S.Context) HLSLInAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLOut:
+      declAttr = ::new (S.Context) HLSLOutAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLInOut:
+      declAttr = ::new (S.Context) HLSLInOutAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLMaybeUnused:
+      declAttr = ::new (S.Context) HLSLMaybeUnusedAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+
+    case AttributeList::AT_HLSLNoInterpolation:
+      declAttr = ::new (S.Context) HLSLNoInterpolationAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLLinear:
+    case AttributeList::AT_HLSLCenter:
+      declAttr = ::new (S.Context) HLSLLinearAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNoPerspective:
+      declAttr = ::new (S.Context) HLSLNoPerspectiveAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLSample:
+      declAttr = ::new (S.Context) HLSLSampleAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLCentroid:
+      declAttr = ::new (S.Context) HLSLCentroidAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+
+    case AttributeList::AT_HLSLPrecise:
+      declAttr = ::new (S.Context) HLSLPreciseAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLShared:
+      declAttr = ::new (S.Context) HLSLSharedAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLGroupShared:
+      declAttr = ::new (S.Context) HLSLGroupSharedAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
+        VD->setType(S.Context.getAddrSpaceQualType(VD->getType(),
+                                                   DXIL::kTGSMAddrSpace));
+      }
+      break;
+    case AttributeList::AT_HLSLUniform:
+      declAttr = ::new (S.Context) HLSLUniformAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+
+    case AttributeList::AT_HLSLUnorm:
+      declAttr = ::new (S.Context) HLSLUnormAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLSnorm:
+      declAttr = ::new (S.Context) HLSLSnormAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+
+    case AttributeList::AT_HLSLPoint:
+      declAttr = ::new (S.Context) HLSLPointAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLLine:
+      declAttr = ::new (S.Context) HLSLLineAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLLineAdj:
+      declAttr = ::new (S.Context) HLSLLineAdjAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLTriangle:
+      declAttr = ::new (S.Context) HLSLTriangleAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLTriangleAdj:
+      declAttr = ::new (S.Context) HLSLTriangleAdjAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLGloballyCoherent:
+      declAttr = ::new (S.Context) HLSLGloballyCoherentAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLIndices:
+      declAttr = ::new (S.Context) HLSLIndicesAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLVertices:
+      declAttr = ::new (S.Context) HLSLVerticesAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLPrimitives:
+      declAttr = ::new (S.Context) HLSLPrimitivesAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLPayload:
+      declAttr = ::new (S.Context) HLSLPayloadAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLRayPayload:
+      declAttr = ::new (S.Context) HLSLRayPayloadAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLMaxRecords:
+      declAttr = ValidateMaxRecordsAttributes(S, D, A);
+      if (!declAttr) {
+        return;
+      }
+
+      break;
+    case AttributeList::AT_HLSLMaxRecordsSharedWith: {
+      declAttr = ValidateMaxRecordsSharedWithAttributes(S, D, A);
+      if (!declAttr) {
+        return;
+      }
+      break;
+    }
+    case AttributeList::AT_HLSLNodeArraySize: {
+      declAttr = ::new (S.Context) HLSLNodeArraySizeAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    }
+    case AttributeList::AT_HLSLAllowSparseNodes:
+      declAttr = ::new (S.Context) HLSLAllowSparseNodesAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNodeId:
+      declAttr = ::new (S.Context) HLSLNodeIdAttr(
+          A.getRange(), S.Context, ValidateAttributeStringArg(S, A, nullptr, 0),
+          ValidateAttributeIntArg(S, A, 1), A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNodeTrackRWInputSharing:
+      declAttr = ::new (S.Context) HLSLNodeTrackRWInputSharingAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    // SPIRV Change Starts
+    case AttributeList::AT_VKDecorateIdExt: {
+      if (A.getNumArgs() == 0 || !A.getArg(0).is<clang::Expr *>()) {
+        Handled = false;
+        break;
+      }
+
+      unsigned decoration = 0;
+      if (IntegerLiteral *decorationAsLiteral =
+              dyn_cast<IntegerLiteral>(A.getArg(0).get<clang::Expr *>())) {
+        decoration = decorationAsLiteral->getValue().getZExtValue();
+      } else {
+        Handled = false;
+        break;
+      }
+
+      llvm::SmallVector<Expr *, 2> args;
+      for (unsigned i = 1; i < A.getNumArgs(); ++i) {
+        if (!A.getArg(i).is<clang::Expr *>()) {
+          Handled = false;
+          break;
+        }
+        args.push_back(A.getArg(i).get<clang::Expr *>());
+      }
+      if (!Handled)
+        break;
+      declAttr = ::new (S.Context)
+          VKDecorateIdExtAttr(A.getRange(), S.Context, decoration, args.data(),
+                              args.size(), A.getAttributeSpellingListIndex());
+    } break;
+      // SPIRV Change Ends
+
+    default:
+      Handled = false;
+      break;
+    }
+
+    if (declAttr != nullptr) {
+      S.DiagnoseHLSLDeclAttr(D, declAttr);
+      DXASSERT_NOMSG(Handled);
+      D->addAttr(declAttr);
+      return;
+    }
+
+    Handled = true;
+    switch (A.getKind()) {
+    // These apply to statements, not declarations. The warning messages
+    // clarify this properly.
+    case AttributeList::AT_HLSLUnroll:
+    case AttributeList::AT_HLSLAllowUAVCondition:
+    case AttributeList::AT_HLSLLoop:
+    case AttributeList::AT_HLSLFastOpt:
+      S.Diag(A.getLoc(),
+             diag::warn_hlsl_unsupported_statement_for_loop_attribute)
+          << A.getName();
+      return;
+    case AttributeList::AT_HLSLBranch:
+    case AttributeList::AT_HLSLFlatten:
+      S.Diag(A.getLoc(),
+             diag::warn_hlsl_unsupported_statement_for_if_switch_attribute)
+          << A.getName();
+      return;
+    case AttributeList::AT_HLSLForceCase:
+    case AttributeList::AT_HLSLCall:
+      S.Diag(A.getLoc(),
+             diag::warn_hlsl_unsupported_statement_for_switch_attribute)
+          << A.getName();
+      return;
+
+    // These are the cases that actually apply to declarations.
+    case AttributeList::AT_HLSLClipPlanes:
+      declAttr = HandleClipPlanes(S, A);
+      break;
+    case AttributeList::AT_HLSLDomain:
+      declAttr = ::new (S.Context)
+          HLSLDomainAttr(A.getRange(), S.Context,
+                         ValidateAttributeStringArg(S, A, "tri,quad,isoline"),
+                         A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLEarlyDepthStencil:
+      declAttr = ::new (S.Context) HLSLEarlyDepthStencilAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLInstance:
+      declAttr = ::new (S.Context) HLSLInstanceAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLMaxTessFactor:
+      declAttr = ::new (S.Context) HLSLMaxTessFactorAttr(
+          A.getRange(), S.Context, ValidateAttributeFloatArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNumThreads: {
+      auto numThreads = ::new (S.Context) HLSLNumThreadsAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          ValidateAttributeIntArg(S, A, 1), ValidateAttributeIntArg(S, A, 2),
+          A.getAttributeSpellingListIndex());
+      if (numThreads->getX() * numThreads->getY() * numThreads->getZ() > 1024)
+        S.Diags.Report(numThreads->getLocation(),
+                       diag::err_hlsl_numthreads_group_size)
+            << numThreads->getRange();
+      declAttr = numThreads;
+      break;
+    }
+    case AttributeList::AT_HLSLRootSignature:
+      declAttr = ::new (S.Context) HLSLRootSignatureAttr(
+          A.getRange(), S.Context,
+          ValidateAttributeStringArg(S, A, /*validate strings*/ nullptr),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLOutputControlPoints:
+      declAttr = ::new (S.Context) HLSLOutputControlPointsAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLOutputTopology:
+      declAttr = ::new (S.Context) HLSLOutputTopologyAttr(
+          A.getRange(), S.Context,
+          ValidateAttributeStringArg(
+              S, A, "point,line,triangle,triangle_cw,triangle_ccw"),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLPartitioning:
+      declAttr = ::new (S.Context) HLSLPartitioningAttr(
+          A.getRange(), S.Context,
+          ValidateAttributeStringArg(
+              S, A, "integer,fractional_even,fractional_odd,pow2"),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLPatchConstantFunc:
+      declAttr = ::new (S.Context) HLSLPatchConstantFuncAttr(
+          A.getRange(), S.Context, ValidateAttributeStringArg(S, A, nullptr),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLShader:
+      declAttr = ValidateShaderAttributes(S, D, A);
+      if (!declAttr) {
+        Handled = true;
+        return;
+      }
+      break;
+    case AttributeList::AT_HLSLMaxVertexCount:
+      declAttr = ::new (S.Context) HLSLMaxVertexCountAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLExperimental:
+      declAttr = ::new (S.Context) HLSLExperimentalAttr(
+          A.getRange(), S.Context, ValidateAttributeStringArg(S, A, nullptr, 0),
+          ValidateAttributeStringArg(S, A, nullptr, 1),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_NoInline:
+      declAttr = ::new (S.Context) NoInlineAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLExport:
+      declAttr = ::new (S.Context) HLSLExportAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLWaveSensitive:
+      declAttr = ::new (S.Context) HLSLWaveSensitiveAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLWaveSize:
+      declAttr = ValidateWaveSizeAttributes(S, D, A);
+      break;
+    case AttributeList::AT_HLSLWaveOpsIncludeHelperLanes:
+      declAttr = ::new (S.Context) HLSLWaveOpsIncludeHelperLanesAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNodeLaunch:
+      declAttr = ::new (S.Context) HLSLNodeLaunchAttr(
+          A.getRange(), S.Context,
+          ValidateAttributeStringArg(S, A, "broadcasting,coalescing,thread"),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNodeIsProgramEntry:
+      declAttr = ::new (S.Context) HLSLNodeIsProgramEntryAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNodeTrackRWInputSharing:
+      declAttr = ::new (S.Context) HLSLNodeTrackRWInputSharingAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNodeLocalRootArgumentsTableIndex:
+      declAttr = ::new (S.Context) HLSLNodeLocalRootArgumentsTableIndexAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNodeShareInputOf:
+      declAttr = ::new (S.Context) HLSLNodeShareInputOfAttr(
+          A.getRange(), S.Context, ValidateAttributeStringArg(S, A, nullptr, 0),
+          ValidateAttributeIntArg(S, A, 1), A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLNodeDispatchGrid:
+      declAttr = ::new (S.Context) HLSLNodeDispatchGridAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          ValidateAttributeIntArg(S, A, 1), ValidateAttributeIntArg(S, A, 2),
+          A.getAttributeSpellingListIndex());
+      ValidateDispatchGridValues(S.Diags, A, declAttr);
+      break;
+    case AttributeList::AT_HLSLNodeMaxDispatchGrid:
+      declAttr = ::new (S.Context) HLSLNodeMaxDispatchGridAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          ValidateAttributeIntArg(S, A, 1), ValidateAttributeIntArg(S, A, 2),
+          A.getAttributeSpellingListIndex());
+      ValidateDispatchGridValues(S.Diags, A, declAttr);
+      break;
+    case AttributeList::AT_HLSLNodeMaxRecursionDepth:
+      declAttr = ::new (S.Context) HLSLNodeMaxRecursionDepthAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      if (cast<HLSLNodeMaxRecursionDepthAttr>(declAttr)->getCount() > 32)
+        S.Diags.Report(declAttr->getLocation(),
+                       diag::err_hlsl_maxrecursiondepth_exceeded)
+            << declAttr->getRange();
+      break;
+    default:
+      Handled = false;
+      break; // SPIRV Change: was return;
+    }
+
+    if (declAttr != nullptr) {
+      DXASSERT_NOMSG(Handled);
+      D->addAttr(declAttr);
+
+      // The attribute has been set but will have no effect. Validation will
+      // emit a diagnostic and prevent code generation.
+      ValidateAttributeTargetIsFunction(S, D, A);
+
+      return; // SPIRV Change
+    }
+
+    // SPIRV Change Starts
+    Handled = true;
+    switch (A.getKind()) {
+    case AttributeList::AT_VKBuiltIn:
+      declAttr = ::new (S.Context) VKBuiltInAttr(
+          A.getRange(), S.Context,
+          ValidateAttributeStringArg(
+              S, A,
+              "PointSize,HelperInvocation,BaseVertex,BaseInstance,"
+              "DrawIndex,DeviceIndex,ViewportMaskNV"),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKLocation:
+      declAttr = ::new (S.Context)
+          VKLocationAttr(A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+                         A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKIndex:
+      declAttr = ::new (S.Context)
+          VKIndexAttr(A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+                      A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKBinding:
+      declAttr = ::new (S.Context) VKBindingAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getNumArgs() < 2 ? INT_MIN : ValidateAttributeIntArg(S, A, 1),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKCounterBinding:
+      declAttr = ::new (S.Context) VKCounterBindingAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKPushConstant:
+      declAttr = ::new (S.Context) VKPushConstantAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKOffset:
+      declAttr = ::new (S.Context)
+          VKOffsetAttr(A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+                       A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKCombinedImageSampler:
+      declAttr = ::new (S.Context) VKCombinedImageSamplerAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKImageFormat: {
+      VKImageFormatAttr::ImageFormatType Kind = ValidateAttributeEnumArg<
+          VKImageFormatAttr, VKImageFormatAttr::ImageFormatType,
+          VKImageFormatAttr::ConvertStrToImageFormatType>(
+          S, A, VKImageFormatAttr::ImageFormatType::unknown);
+      declAttr = ::new (S.Context) VKImageFormatAttr(
+          A.getRange(), S.Context, Kind, A.getAttributeSpellingListIndex());
+      break;
+    }
+    case AttributeList::AT_VKInputAttachmentIndex:
+      declAttr = ::new (S.Context) VKInputAttachmentIndexAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKConstantId:
+      declAttr = ::new (S.Context) VKConstantIdAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKPostDepthCoverage:
+      declAttr = ::new (S.Context) VKPostDepthCoverageAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKEarlyAndLateTests:
+      declAttr = ::new (S.Context) VKEarlyAndLateTestsAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKDepthUnchanged:
+      declAttr = ::new (S.Context) VKDepthUnchangedAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKStencilRefUnchangedFront:
+      declAttr = ::new (S.Context) VKStencilRefUnchangedFrontAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKStencilRefGreaterEqualFront:
+      declAttr = ::new (S.Context) VKStencilRefGreaterEqualFrontAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKStencilRefLessEqualFront:
+      declAttr = ::new (S.Context) VKStencilRefLessEqualFrontAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKStencilRefUnchangedBack:
+      declAttr = ::new (S.Context) VKStencilRefUnchangedBackAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKStencilRefGreaterEqualBack:
+      declAttr = ::new (S.Context) VKStencilRefGreaterEqualBackAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKStencilRefLessEqualBack:
+      declAttr = ::new (S.Context) VKStencilRefLessEqualBackAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKShaderRecordNV:
+      declAttr = ::new (S.Context) VKShaderRecordNVAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKShaderRecordEXT:
+      declAttr = ::new (S.Context) VKShaderRecordEXTAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKCapabilityExt:
+      declAttr = ::new (S.Context) VKCapabilityExtAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKExtensionExt:
+      declAttr = ::new (S.Context) VKExtensionExtAttr(
+          A.getRange(), S.Context, ValidateAttributeStringArg(S, A, nullptr),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKInstructionExt:
+      declAttr = ::new (S.Context) VKInstructionExtAttr(
+          A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+          ValidateAttributeStringArg(S, A, nullptr, 1),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKLiteralExt:
+      declAttr = ::new (S.Context) VKLiteralExtAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKReferenceExt:
+      declAttr = ::new (S.Context) VKReferenceExtAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKDecorateExt: {
+      unsigned decoration = unsigned(ValidateAttributeIntArg(S, A));
+      llvm::SmallVector<unsigned, 2> args;
+      for (unsigned i = 1; i < A.getNumArgs(); ++i) {
+        args.push_back(unsigned(ValidateAttributeIntArg(S, A, i)));
+      }
+      // Note that `llvm::SmallVector<unsigned, 2> args` will be destroyed at
+      // the end of this function. However, VKDecorateExtAttr() constructor
+      // allocate a new integer array internally for args. It does not create
+      // a dangling pointer.
+      declAttr = ::new (S.Context)
+          VKDecorateExtAttr(A.getRange(), S.Context, decoration, args.data(),
+                            args.size(), A.getAttributeSpellingListIndex());
+    } break;
+    case AttributeList::AT_VKDecorateStringExt: {
+      unsigned decoration = unsigned(ValidateAttributeIntArg(S, A));
+      llvm::SmallVector<std::string, 2> args;
+      for (unsigned i = 1; i < A.getNumArgs(); ++i) {
+        args.push_back(ValidateAttributeStringArg(S, A, nullptr, i));
+      }
+      // Note that `llvm::SmallVector<std::string, 2> args` will be destroyed
+      // at the end of this function. However, VKDecorateExtAttr() constructor
+      // allocate a new integer array internally for args. It does not create
+      // a dangling pointer.
+      declAttr = ::new (S.Context) VKDecorateStringExtAttr(
+          A.getRange(), S.Context, decoration, args.data(), args.size(),
+          A.getAttributeSpellingListIndex());
+    } break;
+    case AttributeList::AT_VKStorageClassExt:
+      declAttr = ::new (S.Context) VKStorageClassExtAttr(
+          A.getRange(), S.Context, unsigned(ValidateAttributeIntArg(S, A)),
+          A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_VKTypeDefExt:
+      declAttr = ::new (S.Context) VKTypeDefExtAttr(
+          A.getRange(), S.Context, unsigned(ValidateAttributeIntArg(S, A)),
+          unsigned(ValidateAttributeIntArg(S, A, 1)),
+          A.getAttributeSpellingListIndex());
+      break;
+    default:
+      Handled = false;
+      return;
+    }
+
+    if (declAttr != nullptr) {
+      DXASSERT_NOMSG(Handled);
+      D->addAttr(declAttr);
+    }
+    // SPIRV Change Ends
+  }
+
+  /// <summary>Processes an attribute for a statement.</summary>
+  /// <param name="S">Sema with context.</param>
+  /// <param name="St">Statement annotated.</param>
+  /// <param name="A">Single parsed attribute to process.</param>
+  /// <param name="Range">Range of all attribute lists (useful for FixIts to
+  /// suggest inclusions).</param> <param name="Handled">After execution,
+  /// whether this was recognized and handled.</param> <returns>An attribute
+  /// instance if processed, nullptr if not recognized or an error was
+  /// found.</returns>
+  Attr *hlsl::ProcessStmtAttributeForHLSL(Sema & S, Stmt * St,
+                                          const AttributeList &A,
+                                          SourceRange Range, bool &Handled) {
+    // | Construct        | Allowed Attributes                         |
+    // +------------------+--------------------------------------------+
+    // | for, while, do   | loop, fastopt, unroll, allow_uav_condition |
+    // | if               | branch, flatten                            |
+    // | switch           | branch, flatten, forcecase, call           |
+
+    Attr *result = nullptr;
+    Handled = true;
+
+    // SPIRV Change Starts
+    if (A.hasScope() && A.getScopeName()->getName().equals("vk")) {
+      switch (A.getKind()) {
+      case AttributeList::AT_VKCapabilityExt:
+        return ::new (S.Context) VKCapabilityExtAttr(
+            A.getRange(), S.Context, ValidateAttributeIntArg(S, A),
+            A.getAttributeSpellingListIndex());
+      case AttributeList::AT_VKExtensionExt:
+        return ::new (S.Context) VKExtensionExtAttr(
+            A.getRange(), S.Context, ValidateAttributeStringArg(S, A, nullptr),
+            A.getAttributeSpellingListIndex());
+      default:
+        Handled = false;
+        return nullptr;
+      }
+    }
+    // SPIRV Change Ends
+
+    switch (A.getKind()) {
+    case AttributeList::AT_HLSLUnroll:
+      ValidateAttributeOnLoop(S, St, A);
+      result = HandleUnrollAttribute(S, A);
+      break;
+    case AttributeList::AT_HLSLAllowUAVCondition:
+      ValidateAttributeOnLoop(S, St, A);
+      result = ::new (S.Context) HLSLAllowUAVConditionAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLLoop:
+      ValidateAttributeOnLoop(S, St, A);
+      result = ::new (S.Context) HLSLLoopAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLFastOpt:
+      ValidateAttributeOnLoop(S, St, A);
+      result = ::new (S.Context) HLSLFastOptAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLBranch:
+      ValidateAttributeOnSwitchOrIf(S, St, A);
+      result = ::new (S.Context) HLSLBranchAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLFlatten:
+      ValidateAttributeOnSwitchOrIf(S, St, A);
+      result = ::new (S.Context) HLSLFlattenAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLForceCase:
+      ValidateAttributeOnSwitch(S, St, A);
+      result = ::new (S.Context) HLSLForceCaseAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    case AttributeList::AT_HLSLCall:
+      ValidateAttributeOnSwitch(S, St, A);
+      result = ::new (S.Context) HLSLCallAttr(
+          A.getRange(), S.Context, A.getAttributeSpellingListIndex());
+      break;
+    default:
+      Handled = false;
+      break;
+    }
+
+    return result;
+  }
+
+  ////////////////////////////////////////////////////////////////////////////////
+  // Implementation of Sema members. //
+
+  Decl *Sema::ActOnStartHLSLBuffer(
+      Scope * bufferScope, bool cbuffer, SourceLocation KwLoc,
+      IdentifierInfo *Ident, SourceLocation IdentLoc,
+      std::vector<hlsl::UnusualAnnotation *> &BufferAttributes,
+      SourceLocation LBrace) {
+    // For anonymous namespace, take the location of the left brace.
+    DeclContext *lexicalParent = getCurLexicalContext();
+    clang::HLSLBufferDecl *result = HLSLBufferDecl::Create(
+        Context, lexicalParent, cbuffer, /*isConstantBufferView*/ false, KwLoc,
+        Ident, IdentLoc, BufferAttributes, LBrace);
+
+    // Keep track of the currently active buffer.
+    HLSLBuffers.push_back(result);
+
+    // Validate unusual annotations and emit diagnostics.
+    DiagnoseUnusualAnnotationsForHLSL(*this, BufferAttributes);
+    auto &&unusualIter = BufferAttributes.begin();
+    auto &&unusualEnd = BufferAttributes.end();
+    char expectedRegisterType = cbuffer ? 'b' : 't';
+    for (; unusualIter != unusualEnd; ++unusualIter) {
+      switch ((*unusualIter)->getKind()) {
+      case hlsl::UnusualAnnotation::UA_ConstantPacking: {
+        hlsl::ConstantPacking *constantPacking =
+            cast<hlsl::ConstantPacking>(*unusualIter);
+        Diag(constantPacking->Loc,
+             diag::err_hlsl_unsupported_buffer_packoffset);
+        break;
+      }
+      case hlsl::UnusualAnnotation::UA_RegisterAssignment: {
+        hlsl::RegisterAssignment *registerAssignment =
+            cast<hlsl::RegisterAssignment>(*unusualIter);
+
+        if (registerAssignment->isSpaceOnly())
+          continue;
+
+        if (registerAssignment->RegisterType != expectedRegisterType &&
+            registerAssignment->RegisterType != toupper(expectedRegisterType)) {
+          Diag(registerAssignment->Loc, diag::err_hlsl_incorrect_bind_semantic)
+              << (cbuffer ? "'b'" : "'t'");
+        } else if (registerAssignment->ShaderProfile.size() > 0) {
+          Diag(registerAssignment->Loc,
+               diag::err_hlsl_unsupported_buffer_slot_target_specific);
+        }
+        break;
+      }
+      case hlsl::UnusualAnnotation::UA_SemanticDecl: {
+        // Ignore semantic declarations.
+        break;
+      }
+      case hlsl::UnusualAnnotation::UA_PayloadAccessQualifier: {
+        hlsl::PayloadAccessAnnotation *annotation =
+            cast<hlsl::PayloadAccessAnnotation>(*unusualIter);
+        Diag(annotation->Loc,
+             diag::err_hlsl_unsupported_payload_access_qualifier);
+        break;
+      }
+      }
+    }
+
+    PushOnScopeChains(result, bufferScope);
+    PushDeclContext(bufferScope, result);
+
+    ActOnDocumentableDecl(result);
+
+    return result;
+  }
+
+  void Sema::ActOnFinishHLSLBuffer(Decl * Dcl, SourceLocation RBrace) {
+    DXASSERT_NOMSG(Dcl != nullptr);
+    DXASSERT(Dcl == HLSLBuffers.back(), "otherwise push/pop is incorrect");
+    dyn_cast<HLSLBufferDecl>(Dcl)->setRBraceLoc(RBrace);
+    HLSLBuffers.pop_back();
+    PopDeclContext();
+  }
+
+  Decl *Sema::getActiveHLSLBuffer() const {
+    return HLSLBuffers.empty() ? nullptr : HLSLBuffers.back();
+  }
+
+  bool Sema::IsOnHLSLBufferView() {
+    // nullptr will not pushed for cbuffer.
+    return !HLSLBuffers.empty() && getActiveHLSLBuffer() == nullptr;
+  }
+  HLSLBufferDecl::HLSLBufferDecl(
+      DeclContext * DC, bool cbuffer, bool cbufferView, SourceLocation KwLoc,
+      IdentifierInfo *Id, SourceLocation IdLoc,
+      std::vector<hlsl::UnusualAnnotation *> &BufferAttributes,
+      SourceLocation LBrace)
+      : NamedDecl(Decl::HLSLBuffer, DC, IdLoc, DeclarationName(Id)),
+        DeclContext(Decl::HLSLBuffer), LBraceLoc(LBrace), KwLoc(KwLoc),
+        IsCBuffer(cbuffer), IsConstantBufferView(cbufferView) {
+    if (!BufferAttributes.empty()) {
+      setUnusualAnnotations(UnusualAnnotation::CopyToASTContextArray(
+          getASTContext(), BufferAttributes.data(), BufferAttributes.size()));
+    }
+  }
+
+  HLSLBufferDecl *HLSLBufferDecl::Create(
+      ASTContext & C, DeclContext * lexicalParent, bool cbuffer,
+      bool constantbuffer, SourceLocation KwLoc, IdentifierInfo *Id,
+      SourceLocation IdLoc,
+      std::vector<hlsl::UnusualAnnotation *> &BufferAttributes,
+      SourceLocation LBrace) {
+    DeclContext *DC = C.getTranslationUnitDecl();
+    HLSLBufferDecl *result =
+        ::new (C) HLSLBufferDecl(DC, cbuffer, constantbuffer, KwLoc, Id, IdLoc,
+                                 BufferAttributes, LBrace);
+    if (DC != lexicalParent) {
+      result->setLexicalDeclContext(lexicalParent);
+    }
+
+    return result;
+  }
+
+  const char *HLSLBufferDecl::getDeclKindName() const {
+    static const char *HLSLBufferNames[] = {"tbuffer", "cbuffer",
+                                            "TextureBuffer", "ConstantBuffer"};
+    unsigned index = (unsigned)isCBuffer() | (isConstantBufferView()) << 1;
+    return HLSLBufferNames[index];
+  }
+
+  void Sema::TransferUnusualAttributes(Declarator & D, NamedDecl * NewDecl) {
+    assert(NewDecl != nullptr);
+
+    if (!getLangOpts().HLSL) {
+      return;
+    }
+
+    if (!D.UnusualAnnotations.empty()) {
+      NewDecl->setUnusualAnnotations(UnusualAnnotation::CopyToASTContextArray(
+          getASTContext(), D.UnusualAnnotations.data(),
+          D.UnusualAnnotations.size()));
+      D.UnusualAnnotations.clear();
+    }
+  }
+
+  /// Checks whether a usage attribute is compatible with those seen so far
+  /// and maintains history.
+  static bool IsUsageAttributeCompatible(AttributeList::Kind kind,
+                                         bool &usageIn, bool &usageOut) {
+    switch (kind) {
+    case AttributeList::AT_HLSLIn:
+      if (usageIn)
         return false;
+      usageIn = true;
+      break;
+    case AttributeList::AT_HLSLOut:
+      if (usageOut)
+        return false;
+      usageOut = true;
+      break;
+    default:
+      assert(kind == AttributeList::AT_HLSLInOut);
+      if (usageOut || usageIn)
+        return false;
+      usageIn = usageOut = true;
+      break;
+    }
+    return true;
+  }
 
-      DeclSpec::SCS storage = D.getDeclSpec().getStorageClassSpec();
-      assert(!DC->isClosure() &&
-             "otherwise parser accepted closure syntax instead "
-             "of failing with a syntax error");
+  // Diagnose valid/invalid modifiers for HLSL.
+  bool Sema::DiagnoseHLSLDecl(Declarator & D, DeclContext * DC, Expr * BitWidth,
+                              TypeSourceInfo * TInfo, bool isParameter) {
+    assert(getLangOpts().HLSL &&
+           "otherwise this is called without checking language first");
 
-      bool result = true;
-      bool isTypedef = storage == DeclSpec::SCS_typedef;
-      bool isFunction = D.isFunctionDeclarator() && !DC->isRecord();
-      bool isLocalVar = DC->isFunctionOrMethod() && !isFunction && !isTypedef;
-      bool isGlobal = !isParameter && !isTypedef && !isFunction &&
-                      (DC->isTranslationUnit() || DC->isNamespace() ||
-                       DC->getDeclKind() == Decl::HLSLBuffer);
-      bool isMethod = DC->isRecord() && D.isFunctionDeclarator() && !isTypedef;
-      bool isField = DC->isRecord() && !D.isFunctionDeclarator() && !isTypedef;
+    // If we have a template declaration but haven't enabled templates, error.
+    if (DC->isDependentContext() &&
+        getLangOpts().HLSLVersion < hlsl::LangStd::v2021)
+      return false;
 
-      bool isConst =
-          D.getDeclSpec().getTypeQualifiers() & DeclSpec::TQ::TQ_const;
-      bool isVolatile =
-          D.getDeclSpec().getTypeQualifiers() & DeclSpec::TQ::TQ_volatile;
-      bool isStatic = storage == DeclSpec::SCS::SCS_static;
-      bool isExtern = storage == DeclSpec::SCS::SCS_extern;
+    DeclSpec::SCS storage = D.getDeclSpec().getStorageClassSpec();
+    assert(!DC->isClosure() &&
+           "otherwise parser accepted closure syntax instead "
+           "of failing with a syntax error");
 
-      bool hasSignSpec =
-          D.getDeclSpec().getTypeSpecSign() != DeclSpec::TSS::TSS_unspecified;
+    bool result = true;
+    bool isTypedef = storage == DeclSpec::SCS_typedef;
+    bool isFunction = D.isFunctionDeclarator() && !DC->isRecord();
+    bool isLocalVar = DC->isFunctionOrMethod() && !isFunction && !isTypedef;
+    bool isGlobal = !isParameter && !isTypedef && !isFunction &&
+                    (DC->isTranslationUnit() || DC->isNamespace() ||
+                     DC->getDeclKind() == Decl::HLSLBuffer);
+    bool isMethod = DC->isRecord() && D.isFunctionDeclarator() && !isTypedef;
+    bool isField = DC->isRecord() && !D.isFunctionDeclarator() && !isTypedef;
 
-      // Function declarations are not allowed in parameter declaration
-      // TODO : Remove this check once we support function declarations/pointers
-      // in HLSL
-      if (isParameter && isFunction) {
-        Diag(D.getLocStart(), diag::err_hlsl_func_in_func_decl);
+    bool isConst = D.getDeclSpec().getTypeQualifiers() & DeclSpec::TQ::TQ_const;
+    bool isVolatile =
+        D.getDeclSpec().getTypeQualifiers() & DeclSpec::TQ::TQ_volatile;
+    bool isStatic = storage == DeclSpec::SCS::SCS_static;
+    bool isExtern = storage == DeclSpec::SCS::SCS_extern;
+
+    bool hasSignSpec =
+        D.getDeclSpec().getTypeSpecSign() != DeclSpec::TSS::TSS_unspecified;
+
+    // Function declarations are not allowed in parameter declaration
+    // TODO : Remove this check once we support function declarations/pointers
+    // in HLSL
+    if (isParameter && isFunction) {
+      Diag(D.getLocStart(), diag::err_hlsl_func_in_func_decl);
+      D.setInvalidType();
+      return false;
+    }
+
+    assert((1 == (isLocalVar ? 1 : 0) + (isGlobal ? 1 : 0) + (isField ? 1 : 0) +
+                     (isTypedef ? 1 : 0) + (isFunction ? 1 : 0) +
+                     (isMethod ? 1 : 0) + (isParameter ? 1 : 0)) &&
+           "exactly one type of declarator is being processed");
+
+    // qt/pType captures either the type being modified, or the return type in
+    // the case of a function (or method).
+    QualType qt = TInfo->getType();
+    const Type *pType = qt.getTypePtrOrNull();
+    HLSLExternalSource *hlslSource = HLSLExternalSource::FromSema(this);
+
+    if (!isFunction)
+      hlslSource->WarnMinPrecision(qt, D.getLocStart());
+
+    // Early checks - these are not simple attribution errors, but constructs
+    // that are fundamentally unsupported, and so we avoid errors that might
+    // indicate they can be repaired.
+    if (DC->isRecord()) {
+      unsigned int nestedDiagId = 0;
+      if (isTypedef) {
+        nestedDiagId = diag::err_hlsl_unsupported_nested_typedef;
+      }
+
+      if (isField && pType && pType->isIncompleteArrayType()) {
+        nestedDiagId = diag::err_hlsl_unsupported_incomplete_array;
+      }
+
+      if (nestedDiagId) {
+        Diag(D.getLocStart(), nestedDiagId);
         D.setInvalidType();
         return false;
       }
+    }
 
-      assert((1 == (isLocalVar ? 1 : 0) + (isGlobal ? 1 : 0) +
-                       (isField ? 1 : 0) + (isTypedef ? 1 : 0) +
-                       (isFunction ? 1 : 0) + (isMethod ? 1 : 0) +
-                       (isParameter ? 1 : 0)) &&
-             "exactly one type of declarator is being processed");
-
-      // qt/pType captures either the type being modified, or the return type in
-      // the case of a function (or method).
-      QualType qt = TInfo->getType();
-      const Type *pType = qt.getTypePtrOrNull();
-      HLSLExternalSource *hlslSource = HLSLExternalSource::FromSema(this);
-
-      if (!isFunction)
-        hlslSource->WarnMinPrecision(qt, D.getLocStart());
-
-      // Early checks - these are not simple attribution errors, but constructs
-      // that are fundamentally unsupported, and so we avoid errors that might
-      // indicate they can be repaired.
-      if (DC->isRecord()) {
-        unsigned int nestedDiagId = 0;
-        if (isTypedef) {
-          nestedDiagId = diag::err_hlsl_unsupported_nested_typedef;
-        }
-
-        if (isField && pType && pType->isIncompleteArrayType()) {
-          nestedDiagId = diag::err_hlsl_unsupported_incomplete_array;
-        }
-
-        if (nestedDiagId) {
-          Diag(D.getLocStart(), nestedDiagId);
-          D.setInvalidType();
-          return false;
-        }
+    // String and subobject declarations are supported only as top level
+    // global variables. Const and static modifiers are implied - add them if
+    // missing.
+    if ((hlsl::IsStringType(qt) || hlslSource->IsSubobjectType(qt)) &&
+        !D.isInvalidType()) {
+      // string are supported only as top level global variables
+      if (!DC->isTranslationUnit()) {
+        Diag(D.getLocStart(), diag::err_hlsl_object_not_global)
+            << (int)hlsl::IsStringType(qt);
+        result = false;
       }
-
-      // String and subobject declarations are supported only as top level
-      // global variables. Const and static modifiers are implied - add them if
-      // missing.
-      if ((hlsl::IsStringType(qt) || hlslSource->IsSubobjectType(qt)) &&
-          !D.isInvalidType()) {
-        // string are supported only as top level global variables
-        if (!DC->isTranslationUnit()) {
-          Diag(D.getLocStart(), diag::err_hlsl_object_not_global)
-              << (int)hlsl::IsStringType(qt);
-          result = false;
-        }
-        if (isExtern) {
-          Diag(D.getLocStart(), diag::err_hlsl_object_extern_not_supported)
-              << (int)hlsl::IsStringType(qt);
-          result = false;
-        }
-        const char *PrevSpec = nullptr;
-        unsigned DiagID = 0;
-        if (!isStatic) {
-          D.getMutableDeclSpec().SetStorageClassSpec(
-              *this, DeclSpec::SCS_static, D.getLocStart(), PrevSpec, DiagID,
-              Context.getPrintingPolicy());
-          isStatic = true;
-        }
-        if (!isConst) {
-          D.getMutableDeclSpec().SetTypeQual(DeclSpec::TQ_const,
-                                             D.getLocStart(), PrevSpec, DiagID,
-                                             getLangOpts());
-          isConst = true;
-        }
-      }
-
-      const char *declarationType = (isLocalVar)    ? "local variable"
-                                    : (isTypedef)   ? "typedef"
-                                    : (isFunction)  ? "function"
-                                    : (isMethod)    ? "method"
-                                    : (isGlobal)    ? "global variable"
-                                    : (isParameter) ? "parameter"
-                                    : (isField)     ? "field"
-                                                    : "<unknown>";
-
-      if (pType && D.isFunctionDeclarator()) {
-        const FunctionProtoType *pFP = pType->getAs<FunctionProtoType>();
-        if (pFP) {
-          qt = pFP->getReturnType();
-          hlslSource->WarnMinPrecision(qt, D.getLocStart());
-          pType = qt.getTypePtrOrNull();
-
-          // prohibit string as a return type
-          if (hlsl::IsStringType(qt)) {
-            static const unsigned selectReturnValueIdx = 2;
-            Diag(D.getLocStart(), diag::err_hlsl_unsupported_string_decl)
-                << selectReturnValueIdx;
-            D.setInvalidType();
-          }
-        }
-      }
-
-      // Check for deprecated effect object type here, warn, and invalidate decl
-      bool bDeprecatedEffectObject = false;
-      bool bIsObject = false;
-      if (hlsl::IsObjectType(this, qt, &bDeprecatedEffectObject)) {
-        bIsObject = true;
-        if (bDeprecatedEffectObject) {
-          Diag(D.getLocStart(), diag::warn_hlsl_effect_object);
-          D.setInvalidType();
-          return false;
-        }
-      } else if (qt->isArrayType()) {
-        QualType eltQt(qt->getArrayElementTypeNoTypeQual(), 0);
-        while (eltQt->isArrayType())
-          eltQt = QualType(eltQt->getArrayElementTypeNoTypeQual(), 0);
-
-        if (hlsl::IsObjectType(this, eltQt, &bDeprecatedEffectObject)) {
-          bIsObject = true;
-        }
-      }
-
       if (isExtern) {
-        if (!(isFunction || isGlobal)) {
-          Diag(D.getLocStart(), diag::err_hlsl_varmodifierna)
-              << "'extern'" << declarationType;
-          result = false;
+        Diag(D.getLocStart(), diag::err_hlsl_object_extern_not_supported)
+            << (int)hlsl::IsStringType(qt);
+        result = false;
+      }
+      const char *PrevSpec = nullptr;
+      unsigned DiagID = 0;
+      if (!isStatic) {
+        D.getMutableDeclSpec().SetStorageClassSpec(
+            *this, DeclSpec::SCS_static, D.getLocStart(), PrevSpec, DiagID,
+            Context.getPrintingPolicy());
+        isStatic = true;
+      }
+      if (!isConst) {
+        D.getMutableDeclSpec().SetTypeQual(DeclSpec::TQ_const, D.getLocStart(),
+                                           PrevSpec, DiagID, getLangOpts());
+        isConst = true;
+      }
+    }
+
+    const char *declarationType = (isLocalVar)    ? "local variable"
+                                  : (isTypedef)   ? "typedef"
+                                  : (isFunction)  ? "function"
+                                  : (isMethod)    ? "method"
+                                  : (isGlobal)    ? "global variable"
+                                  : (isParameter) ? "parameter"
+                                  : (isField)     ? "field"
+                                                  : "<unknown>";
+
+    if (pType && D.isFunctionDeclarator()) {
+      const FunctionProtoType *pFP = pType->getAs<FunctionProtoType>();
+      if (pFP) {
+        qt = pFP->getReturnType();
+        hlslSource->WarnMinPrecision(qt, D.getLocStart());
+        pType = qt.getTypePtrOrNull();
+
+        // prohibit string as a return type
+        if (hlsl::IsStringType(qt)) {
+          static const unsigned selectReturnValueIdx = 2;
+          Diag(D.getLocStart(), diag::err_hlsl_unsupported_string_decl)
+              << selectReturnValueIdx;
+          D.setInvalidType();
         }
       }
+    }
 
-      if (isStatic) {
-        if (!(isLocalVar || isGlobal || isFunction || isMethod || isField)) {
-          Diag(D.getLocStart(), diag::err_hlsl_varmodifierna)
-              << "'static'" << declarationType;
-          result = false;
-        }
+    // Check for deprecated effect object type here, warn, and invalidate decl
+    bool bDeprecatedEffectObject = false;
+    bool bIsObject = false;
+    if (hlsl::IsObjectType(this, qt, &bDeprecatedEffectObject)) {
+      bIsObject = true;
+      if (bDeprecatedEffectObject) {
+        Diag(D.getLocStart(), diag::warn_hlsl_effect_object);
+        D.setInvalidType();
+        return false;
       }
+    } else if (qt->isArrayType()) {
+      QualType eltQt(qt->getArrayElementTypeNoTypeQual(), 0);
+      while (eltQt->isArrayType())
+        eltQt = QualType(eltQt->getArrayElementTypeNoTypeQual(), 0);
 
-      if (isVolatile) {
-        if (!(isLocalVar || isTypedef)) {
-          Diag(D.getLocStart(), diag::err_hlsl_varmodifierna)
-              << "'volatile'" << declarationType;
-          result = false;
-        }
+      if (hlsl::IsObjectType(this, eltQt, &bDeprecatedEffectObject)) {
+        bIsObject = true;
       }
+    }
 
-      if (isConst) {
-        if (isField && !isStatic) {
-          Diag(D.getLocStart(), diag::err_hlsl_varmodifierna)
-              << "'const'" << declarationType;
-          result = false;
-        }
+    if (isExtern) {
+      if (!(isFunction || isGlobal)) {
+        Diag(D.getLocStart(), diag::err_hlsl_varmodifierna)
+            << "'extern'" << declarationType;
+        result = false;
       }
+    }
 
-      ArBasicKind basicKind = hlslSource->GetTypeElementKind(qt);
+    if (isStatic) {
+      if (!(isLocalVar || isGlobal || isFunction || isMethod || isField)) {
+        Diag(D.getLocStart(), diag::err_hlsl_varmodifierna)
+            << "'static'" << declarationType;
+        result = false;
+      }
+    }
 
-      if (hasSignSpec) {
-        ArTypeObjectKind objKind = hlslSource->GetTypeObjectKind(qt);
-        // vectors or matrices can only have unsigned integer types.
-        if (objKind == AR_TOBJ_MATRIX || objKind == AR_TOBJ_VECTOR ||
-            objKind == AR_TOBJ_BASIC || objKind == AR_TOBJ_ARRAY) {
-          if (!IS_BASIC_UNSIGNABLE(basicKind)) {
-            Diag(D.getLocStart(), diag::err_sema_invalid_sign_spec)
-                << g_ArBasicTypeNames[basicKind];
-            result = false;
-          }
-        } else {
+    if (isVolatile) {
+      if (!(isLocalVar || isTypedef)) {
+        Diag(D.getLocStart(), diag::err_hlsl_varmodifierna)
+            << "'volatile'" << declarationType;
+        result = false;
+      }
+    }
+
+    if (isConst) {
+      if (isField && !isStatic) {
+        Diag(D.getLocStart(), diag::err_hlsl_varmodifierna)
+            << "'const'" << declarationType;
+        result = false;
+      }
+    }
+
+    ArBasicKind basicKind = hlslSource->GetTypeElementKind(qt);
+
+    if (hasSignSpec) {
+      ArTypeObjectKind objKind = hlslSource->GetTypeObjectKind(qt);
+      // vectors or matrices can only have unsigned integer types.
+      if (objKind == AR_TOBJ_MATRIX || objKind == AR_TOBJ_VECTOR ||
+          objKind == AR_TOBJ_BASIC || objKind == AR_TOBJ_ARRAY) {
+        if (!IS_BASIC_UNSIGNABLE(basicKind)) {
           Diag(D.getLocStart(), diag::err_sema_invalid_sign_spec)
               << g_ArBasicTypeNames[basicKind];
           result = false;
         }
+      } else {
+        Diag(D.getLocStart(), diag::err_sema_invalid_sign_spec)
+            << g_ArBasicTypeNames[basicKind];
+        result = false;
       }
+    }
 
-      // Validate attributes
-      clang::AttributeList *pUniform = nullptr, *pUsage = nullptr,
-                           *pNoInterpolation = nullptr, *pLinear = nullptr,
-                           *pNoPerspective = nullptr, *pSample = nullptr,
-                           *pCentroid = nullptr, *pCenter = nullptr,
-                           *pAnyLinear =
-                               nullptr, // first linear attribute found
-                               *pTopology = nullptr, *pMeshModifier = nullptr,
-                           *pDispatchGrid = nullptr,
-                           *pMaxDispatchGrid = nullptr;
-      bool usageIn = false;
-      bool usageOut = false;
+    // Validate attributes
+    clang::AttributeList *pUniform = nullptr, *pUsage = nullptr,
+                         *pNoInterpolation = nullptr, *pLinear = nullptr,
+                         *pNoPerspective = nullptr, *pSample = nullptr,
+                         *pCentroid = nullptr, *pCenter = nullptr,
+                         *pAnyLinear = nullptr, // first linear attribute found
+                             *pTopology = nullptr, *pMeshModifier = nullptr,
+                         *pDispatchGrid = nullptr, *pMaxDispatchGrid = nullptr;
+    bool usageIn = false;
+    bool usageOut = false;
 
-      for (clang::AttributeList *pAttr =
-               D.getDeclSpec().getAttributes().getList();
-           pAttr != NULL; pAttr = pAttr->getNext()) {
-        if (pAttr->isInvalid() || pAttr->isUsedAsTypeAttr())
-          continue;
+    for (clang::AttributeList *pAttr =
+             D.getDeclSpec().getAttributes().getList();
+         pAttr != NULL; pAttr = pAttr->getNext()) {
+      if (pAttr->isInvalid() || pAttr->isUsedAsTypeAttr())
+        continue;
+
+      switch (pAttr->getKind()) {
+      case AttributeList::AT_HLSLPrecise: // precise is applicable everywhere.
+        break;
+      case AttributeList::AT_HLSLShared:
+        if (!isGlobal) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
+              << pAttr->getName() << declarationType << pAttr->getRange();
+          result = false;
+        }
+        if (isStatic) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
+              << "'static'" << pAttr->getName() << declarationType
+              << pAttr->getRange();
+          result = false;
+        }
+        break;
+      case AttributeList::AT_HLSLGroupShared:
+        if (!isGlobal) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
+              << pAttr->getName() << declarationType << pAttr->getRange();
+          result = false;
+        }
+        if (isExtern) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
+              << "'extern'" << pAttr->getName() << declarationType
+              << pAttr->getRange();
+          result = false;
+        }
+        break;
+      case AttributeList::AT_HLSLGloballyCoherent: // Handled elsewhere
+        break;
+      case AttributeList::AT_HLSLUniform:
+        if (!(isGlobal || isParameter)) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
+              << pAttr->getName() << declarationType << pAttr->getRange();
+          result = false;
+        }
+        if (isStatic) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
+              << "'static'" << pAttr->getName() << declarationType
+              << pAttr->getRange();
+          result = false;
+        }
+        pUniform = pAttr;
+        break;
+
+      case AttributeList::AT_HLSLIn:
+      case AttributeList::AT_HLSLOut:
+      case AttributeList::AT_HLSLInOut:
+        if (!isParameter) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_usage_not_on_parameter)
+              << pAttr->getName() << pAttr->getRange();
+          result = false;
+        }
+        if (!IsUsageAttributeCompatible(pAttr->getKind(), usageIn, usageOut)) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_duplicate_parameter_usages)
+              << pAttr->getName() << pAttr->getRange();
+          result = false;
+        }
+        pUsage = pAttr;
+        break;
+
+      case AttributeList::AT_HLSLNoInterpolation:
+        if (!(isParameter || isField || isFunction)) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
+              << pAttr->getName() << declarationType << pAttr->getRange();
+          result = false;
+        }
+        if (pNoInterpolation) {
+          Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
+              << pAttr->getName() << pAttr->getRange();
+        }
+        pNoInterpolation = pAttr;
+        break;
+
+      case AttributeList::AT_HLSLLinear:
+      case AttributeList::AT_HLSLCenter:
+      case AttributeList::AT_HLSLNoPerspective:
+      case AttributeList::AT_HLSLSample:
+      case AttributeList::AT_HLSLCentroid:
+        if (!(isParameter || isField || isFunction)) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
+              << pAttr->getName() << declarationType << pAttr->getRange();
+          result = false;
+        }
+
+        if (nullptr == pAnyLinear)
+          pAnyLinear = pAttr;
 
         switch (pAttr->getKind()) {
-        case AttributeList::AT_HLSLPrecise: // precise is applicable everywhere.
-          break;
-        case AttributeList::AT_HLSLShared:
-          if (!isGlobal) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
-                << pAttr->getName() << declarationType << pAttr->getRange();
-            result = false;
-          }
-          if (isStatic) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
-                << "'static'" << pAttr->getName() << declarationType
-                << pAttr->getRange();
-            result = false;
-          }
-          break;
-        case AttributeList::AT_HLSLGroupShared:
-          if (!isGlobal) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
-                << pAttr->getName() << declarationType << pAttr->getRange();
-            result = false;
-          }
-          if (isExtern) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
-                << "'extern'" << pAttr->getName() << declarationType
-                << pAttr->getRange();
-            result = false;
-          }
-          break;
-        case AttributeList::AT_HLSLGloballyCoherent: // Handled elsewhere
-          break;
-        case AttributeList::AT_HLSLUniform:
-          if (!(isGlobal || isParameter)) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
-                << pAttr->getName() << declarationType << pAttr->getRange();
-            result = false;
-          }
-          if (isStatic) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
-                << "'static'" << pAttr->getName() << declarationType
-                << pAttr->getRange();
-            result = false;
-          }
-          pUniform = pAttr;
-          break;
-
-        case AttributeList::AT_HLSLIn:
-        case AttributeList::AT_HLSLOut:
-        case AttributeList::AT_HLSLInOut:
-          if (!isParameter) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_usage_not_on_parameter)
-                << pAttr->getName() << pAttr->getRange();
-            result = false;
-          }
-          if (!IsUsageAttributeCompatible(pAttr->getKind(), usageIn,
-                                          usageOut)) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_duplicate_parameter_usages)
-                << pAttr->getName() << pAttr->getRange();
-            result = false;
-          }
-          pUsage = pAttr;
-          break;
-
-        case AttributeList::AT_HLSLNoInterpolation:
-          if (!(isParameter || isField || isFunction)) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
-                << pAttr->getName() << declarationType << pAttr->getRange();
-            result = false;
-          }
-          if (pNoInterpolation) {
+        case AttributeList::AT_HLSLLinear:
+          if (pLinear) {
             Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
                 << pAttr->getName() << pAttr->getRange();
           }
-          pNoInterpolation = pAttr;
+          pLinear = pAttr;
           break;
-
-        case AttributeList::AT_HLSLLinear:
         case AttributeList::AT_HLSLCenter:
+          if (pCenter) {
+            Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
+                << pAttr->getName() << pAttr->getRange();
+          }
+          pCenter = pAttr;
+          break;
         case AttributeList::AT_HLSLNoPerspective:
+          if (pNoPerspective) {
+            Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
+                << pAttr->getName() << pAttr->getRange();
+          }
+          pNoPerspective = pAttr;
+          break;
         case AttributeList::AT_HLSLSample:
+          if (pSample) {
+            Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
+                << pAttr->getName() << pAttr->getRange();
+          }
+          pSample = pAttr;
+          break;
         case AttributeList::AT_HLSLCentroid:
-          if (!(isParameter || isField || isFunction)) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
-                << pAttr->getName() << declarationType << pAttr->getRange();
-            result = false;
+          if (pCentroid) {
+            Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
+                << pAttr->getName() << pAttr->getRange();
           }
-
-          if (nullptr == pAnyLinear)
-            pAnyLinear = pAttr;
-
-          switch (pAttr->getKind()) {
-          case AttributeList::AT_HLSLLinear:
-            if (pLinear) {
-              Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
-                  << pAttr->getName() << pAttr->getRange();
-            }
-            pLinear = pAttr;
-            break;
-          case AttributeList::AT_HLSLCenter:
-            if (pCenter) {
-              Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
-                  << pAttr->getName() << pAttr->getRange();
-            }
-            pCenter = pAttr;
-            break;
-          case AttributeList::AT_HLSLNoPerspective:
-            if (pNoPerspective) {
-              Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
-                  << pAttr->getName() << pAttr->getRange();
-            }
-            pNoPerspective = pAttr;
-            break;
-          case AttributeList::AT_HLSLSample:
-            if (pSample) {
-              Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
-                  << pAttr->getName() << pAttr->getRange();
-            }
-            pSample = pAttr;
-            break;
-          case AttributeList::AT_HLSLCentroid:
-            if (pCentroid) {
-              Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
-                  << pAttr->getName() << pAttr->getRange();
-            }
-            pCentroid = pAttr;
-            break;
-          default:
-            // Only relevant to the four attribs included in this block.
-            break;
-          }
+          pCentroid = pAttr;
           break;
-
-        case AttributeList::AT_HLSLPoint:
-        case AttributeList::AT_HLSLLine:
-        case AttributeList::AT_HLSLLineAdj:
-        case AttributeList::AT_HLSLTriangle:
-        case AttributeList::AT_HLSLTriangleAdj:
-          if (!(isParameter)) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
-                << pAttr->getName() << declarationType << pAttr->getRange();
-            result = false;
-          }
-
-          if (pTopology) {
-            if (pTopology->getKind() == pAttr->getKind()) {
-              Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
-                  << pAttr->getName() << pAttr->getRange();
-            } else {
-              Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
-                  << pAttr->getName() << pTopology->getName() << declarationType
-                  << pAttr->getRange();
-              result = false;
-            }
-          }
-          pTopology = pAttr;
+        default:
+          // Only relevant to the four attribs included in this block.
           break;
+        }
+        break;
 
-        case AttributeList::AT_HLSLExport:
-          if (!isFunction) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
-                << pAttr->getName() << declarationType << pAttr->getRange();
+      case AttributeList::AT_HLSLPoint:
+      case AttributeList::AT_HLSLLine:
+      case AttributeList::AT_HLSLLineAdj:
+      case AttributeList::AT_HLSLTriangle:
+      case AttributeList::AT_HLSLTriangleAdj:
+        if (!(isParameter)) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
+              << pAttr->getName() << declarationType << pAttr->getRange();
+          result = false;
+        }
 
-            result = false;
-          }
-          if (isStatic) {
+        if (pTopology) {
+          if (pTopology->getKind() == pAttr->getKind()) {
+            Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
+                << pAttr->getName() << pAttr->getRange();
+          } else {
             Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
-                << "'static'" << pAttr->getName() << declarationType
+                << pAttr->getName() << pTopology->getName() << declarationType
                 << pAttr->getRange();
             result = false;
           }
-          break;
-
-        case AttributeList::AT_HLSLIndices:
-        case AttributeList::AT_HLSLVertices:
-        case AttributeList::AT_HLSLPrimitives:
-        case AttributeList::AT_HLSLPayload:
-          if (!(isParameter)) {
-            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
-                << pAttr->getName() << declarationType << pAttr->getRange();
-            result = false;
-          }
-          if (pMeshModifier) {
-            if (pMeshModifier->getKind() == pAttr->getKind()) {
-              Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
-                  << pAttr->getName() << pAttr->getRange();
-            } else {
-              Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
-                  << pAttr->getName() << pMeshModifier->getName()
-                  << declarationType << pAttr->getRange();
-              result = false;
-            }
-          }
-          pMeshModifier = pAttr;
-          break;
-        case AttributeList::AT_HLSLNodeDispatchGrid:
-          if (pDispatchGrid) {
-            // TODO: it would be nice to diffentiate between an exact duplicate
-            // and conflicting values
-            Diag(pAttr->getLoc(), diag::warn_duplicate_attribute_exact)
-                << pAttr->getName() << pAttr->getRange();
-            result = false;
-          } else {
-            // Note: the NodeDispatchGrid values are validated later in
-            // HandleDeclAttributeForHLSL()
-            pDispatchGrid = pAttr;
-          }
-          break;
-        case AttributeList::AT_HLSLNodeMaxDispatchGrid:
-          if (pMaxDispatchGrid) {
-            // TODO: it would be nice to diffentiate between an exact duplicate
-            // and conflicting values
-            Diag(pAttr->getLoc(), diag::warn_duplicate_attribute_exact)
-                << pAttr->getName() << pAttr->getRange();
-            result = false;
-          } else {
-            // Note: the NodeMaxDispatchGrid values are validated later in
-            // HandleDeclAttributeForHLSL()
-            pMaxDispatchGrid = pAttr;
-          }
-          break;
-
-        default:
-          break;
         }
-      }
+        pTopology = pAttr;
+        break;
 
-      if (pNoInterpolation && pAnyLinear) {
-        Diag(pNoInterpolation->getLoc(), diag::err_hlsl_varmodifiersna)
-            << pNoInterpolation->getName() << pAnyLinear->getName()
-            << declarationType << pNoInterpolation->getRange();
-        result = false;
-      }
-      if (pSample && pCentroid) {
-        Diag(pCentroid->getLoc(), diag::warn_hlsl_specifier_overridden)
-            << pCentroid->getName() << pSample->getName()
-            << pCentroid->getRange();
-      }
-      if (pCenter && pCentroid) {
-        Diag(pCenter->getLoc(), diag::warn_hlsl_specifier_overridden)
-            << pCenter->getName() << pCentroid->getName()
-            << pCenter->getRange();
-      }
-      if (pSample && pCenter) {
-        Diag(pCenter->getLoc(), diag::warn_hlsl_specifier_overridden)
-            << pCenter->getName() << pSample->getName() << pCenter->getRange();
-      }
-      clang::AttributeList *pNonUniformAttr =
-          pAnyLinear ? pAnyLinear
-                     : (pNoInterpolation ? pNoInterpolation : pTopology);
-      if (pUniform && pNonUniformAttr) {
-        Diag(pUniform->getLoc(), diag::err_hlsl_varmodifiersna)
-            << pNonUniformAttr->getName() << pUniform->getName()
-            << declarationType << pUniform->getRange();
-        result = false;
-      }
-      if (pAnyLinear && pTopology) {
-        Diag(pAnyLinear->getLoc(), diag::err_hlsl_varmodifiersna)
-            << pTopology->getName() << pAnyLinear->getName() << declarationType
-            << pAnyLinear->getRange();
-        result = false;
-      }
-      if (pNoInterpolation && pTopology) {
-        Diag(pNoInterpolation->getLoc(), diag::err_hlsl_varmodifiersna)
-            << pTopology->getName() << pNoInterpolation->getName()
-            << declarationType << pNoInterpolation->getRange();
-        result = false;
-      }
-      if (pUniform && pUsage) {
-        if (pUsage->getKind() != AttributeList::Kind::AT_HLSLIn) {
-          Diag(pUniform->getLoc(), diag::err_hlsl_varmodifiersna)
-              << pUsage->getName() << pUniform->getName() << declarationType
-              << pUniform->getRange();
+      case AttributeList::AT_HLSLExport:
+        if (!isFunction) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
+              << pAttr->getName() << declarationType << pAttr->getRange();
+
           result = false;
         }
-      }
-      if (pMeshModifier) {
-        if (pMeshModifier->getKind() == AttributeList::Kind::AT_HLSLPayload) {
-          if (!usageIn) {
-            Diag(D.getLocStart(), diag::err_hlsl_missing_in_attr)
-                << pMeshModifier->getName();
+        if (isStatic) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
+              << "'static'" << pAttr->getName() << declarationType
+              << pAttr->getRange();
+          result = false;
+        }
+        break;
+
+      case AttributeList::AT_HLSLIndices:
+      case AttributeList::AT_HLSLVertices:
+      case AttributeList::AT_HLSLPrimitives:
+      case AttributeList::AT_HLSLPayload:
+        if (!(isParameter)) {
+          Diag(pAttr->getLoc(), diag::err_hlsl_varmodifierna)
+              << pAttr->getName() << declarationType << pAttr->getRange();
+          result = false;
+        }
+        if (pMeshModifier) {
+          if (pMeshModifier->getKind() == pAttr->getKind()) {
+            Diag(pAttr->getLoc(), diag::warn_hlsl_duplicate_specifier)
+                << pAttr->getName() << pAttr->getRange();
+          } else {
+            Diag(pAttr->getLoc(), diag::err_hlsl_varmodifiersna)
+                << pAttr->getName() << pMeshModifier->getName()
+                << declarationType << pAttr->getRange();
             result = false;
           }
+        }
+        pMeshModifier = pAttr;
+        break;
+      case AttributeList::AT_HLSLNodeDispatchGrid:
+        if (pDispatchGrid) {
+          // TODO: it would be nice to diffentiate between an exact duplicate
+          // and conflicting values
+          Diag(pAttr->getLoc(), diag::warn_duplicate_attribute_exact)
+              << pAttr->getName() << pAttr->getRange();
+          result = false;
         } else {
-          if (!usageOut) {
-            Diag(D.getLocStart(), diag::err_hlsl_missing_out_attr)
-                << pMeshModifier->getName();
-            result = false;
-          }
+          // Note: the NodeDispatchGrid values are validated later in
+          // HandleDeclAttributeForHLSL()
+          pDispatchGrid = pAttr;
         }
-      }
+        break;
+      case AttributeList::AT_HLSLNodeMaxDispatchGrid:
+        if (pMaxDispatchGrid) {
+          // TODO: it would be nice to diffentiate between an exact duplicate
+          // and conflicting values
+          Diag(pAttr->getLoc(), diag::warn_duplicate_attribute_exact)
+              << pAttr->getName() << pAttr->getRange();
+          result = false;
+        } else {
+          // Note: the NodeMaxDispatchGrid values are validated later in
+          // HandleDeclAttributeForHLSL()
+          pMaxDispatchGrid = pAttr;
+        }
+        break;
 
-      // Validate that stream-ouput objects are marked as inout
-      if (isParameter && !(usageIn && usageOut) &&
-          (basicKind == ArBasicKind::AR_OBJECT_LINESTREAM ||
-           basicKind == ArBasicKind::AR_OBJECT_POINTSTREAM ||
-           basicKind == ArBasicKind::AR_OBJECT_TRIANGLESTREAM)) {
-        Diag(D.getLocStart(), diag::err_hlsl_missing_inout_attr);
+      default:
+        break;
+      }
+    }
+
+    if (pNoInterpolation && pAnyLinear) {
+      Diag(pNoInterpolation->getLoc(), diag::err_hlsl_varmodifiersna)
+          << pNoInterpolation->getName() << pAnyLinear->getName()
+          << declarationType << pNoInterpolation->getRange();
+      result = false;
+    }
+    if (pSample && pCentroid) {
+      Diag(pCentroid->getLoc(), diag::warn_hlsl_specifier_overridden)
+          << pCentroid->getName() << pSample->getName()
+          << pCentroid->getRange();
+    }
+    if (pCenter && pCentroid) {
+      Diag(pCenter->getLoc(), diag::warn_hlsl_specifier_overridden)
+          << pCenter->getName() << pCentroid->getName() << pCenter->getRange();
+    }
+    if (pSample && pCenter) {
+      Diag(pCenter->getLoc(), diag::warn_hlsl_specifier_overridden)
+          << pCenter->getName() << pSample->getName() << pCenter->getRange();
+    }
+    clang::AttributeList *pNonUniformAttr =
+        pAnyLinear ? pAnyLinear
+                   : (pNoInterpolation ? pNoInterpolation : pTopology);
+    if (pUniform && pNonUniformAttr) {
+      Diag(pUniform->getLoc(), diag::err_hlsl_varmodifiersna)
+          << pNonUniformAttr->getName() << pUniform->getName()
+          << declarationType << pUniform->getRange();
+      result = false;
+    }
+    if (pAnyLinear && pTopology) {
+      Diag(pAnyLinear->getLoc(), diag::err_hlsl_varmodifiersna)
+          << pTopology->getName() << pAnyLinear->getName() << declarationType
+          << pAnyLinear->getRange();
+      result = false;
+    }
+    if (pNoInterpolation && pTopology) {
+      Diag(pNoInterpolation->getLoc(), diag::err_hlsl_varmodifiersna)
+          << pTopology->getName() << pNoInterpolation->getName()
+          << declarationType << pNoInterpolation->getRange();
+      result = false;
+    }
+    if (pUniform && pUsage) {
+      if (pUsage->getKind() != AttributeList::Kind::AT_HLSLIn) {
+        Diag(pUniform->getLoc(), diag::err_hlsl_varmodifiersna)
+            << pUsage->getName() << pUniform->getName() << declarationType
+            << pUniform->getRange();
         result = false;
       }
+    }
+    if (pMeshModifier) {
+      if (pMeshModifier->getKind() == AttributeList::Kind::AT_HLSLPayload) {
+        if (!usageIn) {
+          Diag(D.getLocStart(), diag::err_hlsl_missing_in_attr)
+              << pMeshModifier->getName();
+          result = false;
+        }
+      } else {
+        if (!usageOut) {
+          Diag(D.getLocStart(), diag::err_hlsl_missing_out_attr)
+              << pMeshModifier->getName();
+          result = false;
+        }
+      }
+    }
 
-      // SPIRV change starts
+    // Validate that stream-ouput objects are marked as inout
+    if (isParameter && !(usageIn && usageOut) &&
+        (basicKind == ArBasicKind::AR_OBJECT_LINESTREAM ||
+         basicKind == ArBasicKind::AR_OBJECT_POINTSTREAM ||
+         basicKind == ArBasicKind::AR_OBJECT_TRIANGLESTREAM)) {
+      Diag(D.getLocStart(), diag::err_hlsl_missing_inout_attr);
+      result = false;
+    }
+
+    // SPIRV change starts
 #ifdef ENABLE_SPIRV_CODEGEN
-      // Validate that Vulkan specific feature is only used when targeting
-      // SPIR-V
-      if (!getLangOpts().SPIRV) {
-        if (basicKind == ArBasicKind::AR_OBJECT_VK_SUBPASS_INPUT ||
-            basicKind == ArBasicKind::AR_OBJECT_VK_SUBPASS_INPUT_MS ||
-            basicKind == ArBasicKind::AR_OBJECT_VK_SPV_INTRINSIC_TYPE ||
-            basicKind == ArBasicKind::AR_OBJECT_VK_SPV_INTRINSIC_RESULT_ID) {
-          Diag(D.getLocStart(), diag::err_hlsl_vulkan_specific_feature)
-              << g_ArBasicTypeNames[basicKind];
-          result = false;
-        }
+    // Validate that Vulkan specific feature is only used when targeting
+    // SPIR-V
+    if (!getLangOpts().SPIRV) {
+      if (basicKind == ArBasicKind::AR_OBJECT_VK_SUBPASS_INPUT ||
+          basicKind == ArBasicKind::AR_OBJECT_VK_SUBPASS_INPUT_MS ||
+          basicKind == ArBasicKind::AR_OBJECT_VK_SPV_INTRINSIC_TYPE ||
+          basicKind == ArBasicKind::AR_OBJECT_VK_SPV_INTRINSIC_RESULT_ID) {
+        Diag(D.getLocStart(), diag::err_hlsl_vulkan_specific_feature)
+            << g_ArBasicTypeNames[basicKind];
+        result = false;
       }
+    }
 #endif // ENABLE_SPIRV_CODEGEN
-      // SPIRV change ends
+    // SPIRV change ends
 
-      // Disallow bitfields where not enabled explicitly or by HV
-      if (BitWidth) {
-        if (getLangOpts().HLSLVersion < hlsl::LangStd::v2021) {
-          Diag(BitWidth->getExprLoc(), diag::err_hlsl_bitfields);
-          result = false;
-        } else if (!D.UnusualAnnotations.empty()) {
-          Diag(BitWidth->getExprLoc(),
-               diag::err_hlsl_bitfields_with_annotation);
-          result = false;
-        }
+    // Disallow bitfields where not enabled explicitly or by HV
+    if (BitWidth) {
+      if (getLangOpts().HLSLVersion < hlsl::LangStd::v2021) {
+        Diag(BitWidth->getExprLoc(), diag::err_hlsl_bitfields);
+        result = false;
+      } else if (!D.UnusualAnnotations.empty()) {
+        Diag(BitWidth->getExprLoc(), diag::err_hlsl_bitfields_with_annotation);
+        result = false;
       }
-
-      // Validate unusual annotations.
-      hlsl::DiagnoseUnusualAnnotationsForHLSL(*this, D.UnusualAnnotations);
-      if (isField)
-        hlsl::DiagnosePayloadAccessQualifierAnnotations(*this, D, qt,
-                                                        D.UnusualAnnotations);
-      auto &&unusualIter = D.UnusualAnnotations.begin();
-      auto &&unusualEnd = D.UnusualAnnotations.end();
-      for (; unusualIter != unusualEnd; ++unusualIter) {
-        switch ((*unusualIter)->getKind()) {
-        case hlsl::UnusualAnnotation::UA_ConstantPacking: {
-          hlsl::ConstantPacking *constantPacking =
-              cast<hlsl::ConstantPacking>(*unusualIter);
-          if (!isGlobal || HLSLBuffers.size() == 0) {
-            Diag(constantPacking->Loc,
-                 diag::err_hlsl_packoffset_requires_cbuffer);
-            continue;
-          }
-          if (constantPacking->ComponentOffset > 0) {
-            // Validate that this will fit.
-            if (!qt.isNull()) {
-              hlsl::DiagnosePackingOffset(this, constantPacking->Loc, qt,
-                                          constantPacking->ComponentOffset);
-            }
-          }
-          break;
-        }
-        case hlsl::UnusualAnnotation::UA_RegisterAssignment: {
-          hlsl::RegisterAssignment *registerAssignment =
-              cast<hlsl::RegisterAssignment>(*unusualIter);
-          if (registerAssignment->IsValid) {
-            if (!qt.isNull()) {
-              hlsl::DiagnoseRegisterType(this, registerAssignment->Loc, qt,
-                                         registerAssignment->RegisterType);
-            }
-          }
-          break;
-        }
-        case hlsl::UnusualAnnotation::UA_SemanticDecl: {
-          hlsl::SemanticDecl *semanticDecl =
-              cast<hlsl::SemanticDecl>(*unusualIter);
-          if (isTypedef || isLocalVar) {
-            Diag(semanticDecl->Loc, diag::err_hlsl_varmodifierna)
-                << "semantic" << declarationType;
-          }
-          break;
-        }
-        case hlsl::UnusualAnnotation::UA_PayloadAccessQualifier: {
-          hlsl::PayloadAccessAnnotation *annotation =
-              cast<hlsl::PayloadAccessAnnotation>(*unusualIter);
-          if (!isField) {
-            Diag(annotation->Loc,
-                 diag::err_hlsl_unsupported_payload_access_qualifier);
-          }
-          break;
-        }
-        }
-      }
-
-      if (!result) {
-        D.setInvalidType();
-      }
-
-      return result;
     }
 
-    static QualType getUnderlyingType(QualType Type) {
-      while (const TypedefType *TD = dyn_cast<TypedefType>(Type)) {
-        if (const TypedefNameDecl *pDecl = TD->getDecl())
-          Type = pDecl->getUnderlyingType();
-        else
-          break;
-      }
-      return Type;
-    }
-
-    /// <summary>Return HLSL AttributedType objects if they exist on
-    /// type.</summary> <param name="self">Sema with context.</param> <param
-    /// name="type">QualType to inspect.</param> <param
-    /// name="ppMatrixOrientation">Set pointer to column_major/row_major
-    /// AttributedType if supplied.</param> <param name="ppNorm">Set pointer to
-    /// snorm/unorm AttributedType if supplied.</param>
-    void hlsl::GetHLSLAttributedTypes(
-        clang::Sema * self, clang::QualType type,
-        const clang::AttributedType **ppMatrixOrientation,
-        const clang::AttributedType **ppNorm,
-        const clang::AttributedType **ppGLC) {
-      AssignOpt<const clang::AttributedType *>(nullptr, ppMatrixOrientation);
-      AssignOpt<const clang::AttributedType *>(nullptr, ppNorm);
-      AssignOpt<const clang::AttributedType *>(nullptr, ppGLC);
-
-      // Note: we clear output pointers once set so we can stop searching
-      QualType Desugared = getUnderlyingType(type);
-      const AttributedType *AT = dyn_cast<AttributedType>(Desugared);
-      while (AT && (ppMatrixOrientation || ppNorm || ppGLC)) {
-        AttributedType::Kind Kind = AT->getAttrKind();
-
-        if (Kind == AttributedType::attr_hlsl_row_major ||
-            Kind == AttributedType::attr_hlsl_column_major) {
-          if (ppMatrixOrientation) {
-            *ppMatrixOrientation = AT;
-            ppMatrixOrientation = nullptr;
-          }
-        } else if (Kind == AttributedType::attr_hlsl_unorm ||
-                   Kind == AttributedType::attr_hlsl_snorm) {
-          if (ppNorm) {
-            *ppNorm = AT;
-            ppNorm = nullptr;
-          }
-        } else if (Kind == AttributedType::attr_hlsl_globallycoherent) {
-          if (ppGLC) {
-            *ppGLC = AT;
-            ppGLC = nullptr;
+    // Validate unusual annotations.
+    hlsl::DiagnoseUnusualAnnotationsForHLSL(*this, D.UnusualAnnotations);
+    if (isField)
+      hlsl::DiagnosePayloadAccessQualifierAnnotations(*this, D, qt,
+                                                      D.UnusualAnnotations);
+    auto &&unusualIter = D.UnusualAnnotations.begin();
+    auto &&unusualEnd = D.UnusualAnnotations.end();
+    for (; unusualIter != unusualEnd; ++unusualIter) {
+      switch ((*unusualIter)->getKind()) {
+      case hlsl::UnusualAnnotation::UA_ConstantPacking: {
+        hlsl::ConstantPacking *constantPacking =
+            cast<hlsl::ConstantPacking>(*unusualIter);
+        if (!isGlobal || HLSLBuffers.size() == 0) {
+          Diag(constantPacking->Loc,
+               diag::err_hlsl_packoffset_requires_cbuffer);
+          continue;
+        }
+        if (constantPacking->ComponentOffset > 0) {
+          // Validate that this will fit.
+          if (!qt.isNull()) {
+            hlsl::DiagnosePackingOffset(this, constantPacking->Loc, qt,
+                                        constantPacking->ComponentOffset);
           }
         }
-
-        Desugared = getUnderlyingType(AT->getEquivalentType());
-        AT = dyn_cast<AttributedType>(Desugared);
+        break;
       }
+      case hlsl::UnusualAnnotation::UA_RegisterAssignment: {
+        hlsl::RegisterAssignment *registerAssignment =
+            cast<hlsl::RegisterAssignment>(*unusualIter);
+        if (registerAssignment->IsValid) {
+          if (!qt.isNull()) {
+            hlsl::DiagnoseRegisterType(this, registerAssignment->Loc, qt,
+                                       registerAssignment->RegisterType);
+          }
+        }
+        break;
+      }
+      case hlsl::UnusualAnnotation::UA_SemanticDecl: {
+        hlsl::SemanticDecl *semanticDecl =
+            cast<hlsl::SemanticDecl>(*unusualIter);
+        if (isTypedef || isLocalVar) {
+          Diag(semanticDecl->Loc, diag::err_hlsl_varmodifierna)
+              << "semantic" << declarationType;
+        }
+        break;
+      }
+      case hlsl::UnusualAnnotation::UA_PayloadAccessQualifier: {
+        hlsl::PayloadAccessAnnotation *annotation =
+            cast<hlsl::PayloadAccessAnnotation>(*unusualIter);
+        if (!isField) {
+          Diag(annotation->Loc,
+               diag::err_hlsl_unsupported_payload_access_qualifier);
+        }
+        break;
+      }
+      }
+    }
 
-      // Unwrap component type on vector or matrix and check snorm/unorm
-      Desugared =
-          getUnderlyingType(hlsl::GetOriginalElementType(self, Desugared));
-      AT = dyn_cast<AttributedType>(Desugared);
-      while (AT && ppNorm) {
-        AttributedType::Kind Kind = AT->getAttrKind();
+    if (!result) {
+      D.setInvalidType();
+    }
 
-        if (Kind == AttributedType::attr_hlsl_unorm ||
-            Kind == AttributedType::attr_hlsl_snorm) {
+    return result;
+  }
+
+  static QualType getUnderlyingType(QualType Type) {
+    while (const TypedefType *TD = dyn_cast<TypedefType>(Type)) {
+      if (const TypedefNameDecl *pDecl = TD->getDecl())
+        Type = pDecl->getUnderlyingType();
+      else
+        break;
+    }
+    return Type;
+  }
+
+  /// <summary>Return HLSL AttributedType objects if they exist on
+  /// type.</summary> <param name="self">Sema with context.</param> <param
+  /// name="type">QualType to inspect.</param> <param
+  /// name="ppMatrixOrientation">Set pointer to column_major/row_major
+  /// AttributedType if supplied.</param> <param name="ppNorm">Set pointer to
+  /// snorm/unorm AttributedType if supplied.</param>
+  void hlsl::GetHLSLAttributedTypes(
+      clang::Sema * self, clang::QualType type,
+      const clang::AttributedType **ppMatrixOrientation,
+      const clang::AttributedType **ppNorm,
+      const clang::AttributedType **ppGLC) {
+    AssignOpt<const clang::AttributedType *>(nullptr, ppMatrixOrientation);
+    AssignOpt<const clang::AttributedType *>(nullptr, ppNorm);
+    AssignOpt<const clang::AttributedType *>(nullptr, ppGLC);
+
+    // Note: we clear output pointers once set so we can stop searching
+    QualType Desugared = getUnderlyingType(type);
+    const AttributedType *AT = dyn_cast<AttributedType>(Desugared);
+    while (AT && (ppMatrixOrientation || ppNorm || ppGLC)) {
+      AttributedType::Kind Kind = AT->getAttrKind();
+
+      if (Kind == AttributedType::attr_hlsl_row_major ||
+          Kind == AttributedType::attr_hlsl_column_major) {
+        if (ppMatrixOrientation) {
+          *ppMatrixOrientation = AT;
+          ppMatrixOrientation = nullptr;
+        }
+      } else if (Kind == AttributedType::attr_hlsl_unorm ||
+                 Kind == AttributedType::attr_hlsl_snorm) {
+        if (ppNorm) {
           *ppNorm = AT;
           ppNorm = nullptr;
         }
-
-        Desugared = getUnderlyingType(AT->getEquivalentType());
-        AT = dyn_cast<AttributedType>(Desugared);
-      }
-    }
-
-    /// <summary>Returns true if QualType is an HLSL Matrix type.</summary>
-    /// <param name="self">Sema with context.</param>
-    /// <param name="type">QualType to check.</param>
-    bool hlsl::IsMatrixType(clang::Sema * self, clang::QualType type) {
-      return HLSLExternalSource::FromSema(self)->GetTypeObjectKind(type) ==
-             AR_TOBJ_MATRIX;
-    }
-
-    /// <summary>Returns true if QualType is an HLSL Vector type.</summary>
-    /// <param name="self">Sema with context.</param>
-    /// <param name="type">QualType to check.</param>
-    bool hlsl::IsVectorType(clang::Sema * self, clang::QualType type) {
-      return HLSLExternalSource::FromSema(self)->GetTypeObjectKind(type) ==
-             AR_TOBJ_VECTOR;
-    }
-
-    /// <summary>Get element type for an HLSL Matrix or Vector, preserving
-    /// AttributedType.</summary> <param name="self">Sema with context.</param>
-    /// <param name="type">Matrix or Vector type.</param>
-    clang::QualType hlsl::GetOriginalMatrixOrVectorElementType(
-        clang::QualType type) {
-      // TODO: Determine if this is really the best way to get the matrix/vector
-      // specialization without losing the AttributedType on the template
-      // parameter
-      if (const Type *Ty = type.getTypePtrOrNull()) {
-        // A non-dependent template specialization type is always "sugar",
-        // typically for a RecordType.  For example, a class template
-        // specialization type of @c vector<int> will refer to a tag type for
-        // the instantiation @c std::vector<int, std::allocator<int>>.
-        if (const TemplateSpecializationType *pTemplate =
-                Ty->getAs<TemplateSpecializationType>()) {
-          // If we have enough arguments, pull them from the template directly,
-          // rather than doing the extra lookups.
-          if (pTemplate->getNumArgs() > 0)
-            return pTemplate->getArg(0).getAsType();
-
-          QualType templateRecord = pTemplate->desugar();
-          Ty = templateRecord.getTypePtr();
-        }
-        if (!Ty)
-          return QualType();
-
-        if (const auto *TagTy = Ty->getAs<TagType>()) {
-          if (const auto *SpecDecl =
-                  dyn_cast_or_null<ClassTemplateSpecializationDecl>(
-                      TagTy->getDecl()))
-            return SpecDecl->getTemplateArgs()[0].getAsType();
+      } else if (Kind == AttributedType::attr_hlsl_globallycoherent) {
+        if (ppGLC) {
+          *ppGLC = AT;
+          ppGLC = nullptr;
         }
       }
-      return QualType();
+
+      Desugared = getUnderlyingType(AT->getEquivalentType());
+      AT = dyn_cast<AttributedType>(Desugared);
     }
 
-    /// <summary>Get element type, preserving AttributedType, if vector or
-    /// matrix, otherwise return the type unmodified.</summary> <param
-    /// name="self">Sema with context.</param> <param name="type">Input
-    /// type.</param>
-    clang::QualType hlsl::GetOriginalElementType(clang::Sema * self,
-                                                 clang::QualType type) {
-      ArTypeObjectKind Kind =
-          HLSLExternalSource::FromSema(self)->GetTypeObjectKind(type);
-      if (Kind == AR_TOBJ_MATRIX || Kind == AR_TOBJ_VECTOR) {
-        return GetOriginalMatrixOrVectorElementType(type);
+    // Unwrap component type on vector or matrix and check snorm/unorm
+    Desugared =
+        getUnderlyingType(hlsl::GetOriginalElementType(self, Desugared));
+    AT = dyn_cast<AttributedType>(Desugared);
+    while (AT && ppNorm) {
+      AttributedType::Kind Kind = AT->getAttrKind();
+
+      if (Kind == AttributedType::attr_hlsl_unorm ||
+          Kind == AttributedType::attr_hlsl_snorm) {
+        *ppNorm = AT;
+        ppNorm = nullptr;
       }
-      return type;
+
+      Desugared = getUnderlyingType(AT->getEquivalentType());
+      AT = dyn_cast<AttributedType>(Desugared);
     }
+  }
 
-    void hlsl::CustomPrintHLSLAttr(const clang::Attr *A, llvm::raw_ostream &Out,
-                                   const clang::PrintingPolicy &Policy,
-                                   unsigned int Indentation) {
-      switch (A->getKind()) {
+  /// <summary>Returns true if QualType is an HLSL Matrix type.</summary>
+  /// <param name="self">Sema with context.</param>
+  /// <param name="type">QualType to check.</param>
+  bool hlsl::IsMatrixType(clang::Sema * self, clang::QualType type) {
+    return HLSLExternalSource::FromSema(self)->GetTypeObjectKind(type) ==
+           AR_TOBJ_MATRIX;
+  }
 
-      // Parameter modifiers
-      case clang::attr::HLSLIn:
-        Out << "in ";
-        break;
+  /// <summary>Returns true if QualType is an HLSL Vector type.</summary>
+  /// <param name="self">Sema with context.</param>
+  /// <param name="type">QualType to check.</param>
+  bool hlsl::IsVectorType(clang::Sema * self, clang::QualType type) {
+    return HLSLExternalSource::FromSema(self)->GetTypeObjectKind(type) ==
+           AR_TOBJ_VECTOR;
+  }
 
-      case clang::attr::HLSLInOut:
-        Out << "inout ";
-        break;
+  /// <summary>Get element type for an HLSL Matrix or Vector, preserving
+  /// AttributedType.</summary> <param name="self">Sema with context.</param>
+  /// <param name="type">Matrix or Vector type.</param>
+  clang::QualType hlsl::GetOriginalMatrixOrVectorElementType(
+      clang::QualType type) {
+    // TODO: Determine if this is really the best way to get the matrix/vector
+    // specialization without losing the AttributedType on the template
+    // parameter
+    if (const Type *Ty = type.getTypePtrOrNull()) {
+      // A non-dependent template specialization type is always "sugar",
+      // typically for a RecordType.  For example, a class template
+      // specialization type of @c vector<int> will refer to a tag type for
+      // the instantiation @c std::vector<int, std::allocator<int>>.
+      if (const TemplateSpecializationType *pTemplate =
+              Ty->getAs<TemplateSpecializationType>()) {
+        // If we have enough arguments, pull them from the template directly,
+        // rather than doing the extra lookups.
+        if (pTemplate->getNumArgs() > 0)
+          return pTemplate->getArg(0).getAsType();
 
-      case clang::attr::HLSLOut:
-        Out << "out ";
-        break;
-
-      // Interpolation modifiers
-      case clang::attr::HLSLLinear:
-        Out << "linear ";
-        break;
-
-      case clang::attr::HLSLCenter:
-        Out << "center ";
-        break;
-
-      case clang::attr::HLSLCentroid:
-        Out << "centroid ";
-        break;
-
-      case clang::attr::HLSLNoInterpolation:
-        Out << "nointerpolation ";
-        break;
-
-      case clang::attr::HLSLNoPerspective:
-        Out << "noperspective ";
-        break;
-
-      case clang::attr::HLSLSample:
-        Out << "sample ";
-        break;
-
-      // Function attributes
-      case clang::attr::HLSLClipPlanes: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLClipPlanesAttr *ACast = static_cast<HLSLClipPlanesAttr *>(noconst);
-
-        if (!ACast->getClipPlane1())
-          break;
-
-        Indent(Indentation, Out);
-        Out << "[clipplanes(";
-        ACast->getClipPlane1()->printPretty(Out, 0, Policy);
-        PrintClipPlaneIfPresent(ACast->getClipPlane2(), Out, Policy);
-        PrintClipPlaneIfPresent(ACast->getClipPlane3(), Out, Policy);
-        PrintClipPlaneIfPresent(ACast->getClipPlane4(), Out, Policy);
-        PrintClipPlaneIfPresent(ACast->getClipPlane5(), Out, Policy);
-        PrintClipPlaneIfPresent(ACast->getClipPlane6(), Out, Policy);
-        Out << ")]\n";
-
-        break;
+        QualType templateRecord = pTemplate->desugar();
+        Ty = templateRecord.getTypePtr();
       }
+      if (!Ty)
+        return QualType();
 
-      case clang::attr::HLSLDomain: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLDomainAttr *ACast = static_cast<HLSLDomainAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[domain(\"" << ACast->getDomainType() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLEarlyDepthStencil:
-        Indent(Indentation, Out);
-        Out << "[earlydepthstencil]\n";
-        break;
-
-      case clang::attr::HLSLInstance: // TODO - test
-      {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLInstanceAttr *ACast = static_cast<HLSLInstanceAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[instance(" << ACast->getCount() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLMaxTessFactor: // TODO - test
-      {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLMaxTessFactorAttr *ACast =
-            static_cast<HLSLMaxTessFactorAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[maxtessfactor(" << ACast->getFactor() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLNumThreads: // TODO - test
-      {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLNumThreadsAttr *ACast = static_cast<HLSLNumThreadsAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[numthreads(" << ACast->getX() << ", " << ACast->getY() << ", "
-            << ACast->getZ() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLRootSignature: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLRootSignatureAttr *ACast =
-            static_cast<HLSLRootSignatureAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[RootSignature(\"" << ACast->getSignatureName() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLOutputControlPoints: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLOutputControlPointsAttr *ACast =
-            static_cast<HLSLOutputControlPointsAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[outputcontrolpoints(" << ACast->getCount() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLOutputTopology: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLOutputTopologyAttr *ACast =
-            static_cast<HLSLOutputTopologyAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[outputtopology(\"" << ACast->getTopology() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLPartitioning: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLPartitioningAttr *ACast =
-            static_cast<HLSLPartitioningAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[partitioning(\"" << ACast->getScheme() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLPatchConstantFunc: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLPatchConstantFuncAttr *ACast =
-            static_cast<HLSLPatchConstantFuncAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[patchconstantfunc(\"" << ACast->getFunctionName() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLShader: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLShaderAttr *ACast = static_cast<HLSLShaderAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[shader(\"" << ACast->getStage() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLExperimental: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLExperimentalAttr *ACast =
-            static_cast<HLSLExperimentalAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[experimental(\"" << ACast->getName() << "\", \""
-            << ACast->getValue() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLMaxVertexCount: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLMaxVertexCountAttr *ACast =
-            static_cast<HLSLMaxVertexCountAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[maxvertexcount(" << ACast->getCount() << ")]\n";
-        break;
-      }
-
-      case clang::attr::NoInline:
-        Indent(Indentation, Out);
-        Out << "[noinline]\n";
-        break;
-
-      case clang::attr::HLSLExport:
-        Indent(Indentation, Out);
-        Out << "export\n";
-        break;
-
-        // Statement attributes
-      case clang::attr::HLSLAllowUAVCondition:
-        Indent(Indentation, Out);
-        Out << "[allow_uav_condition]\n";
-        break;
-
-      case clang::attr::HLSLBranch:
-        Indent(Indentation, Out);
-        Out << "[branch]\n";
-        break;
-
-      case clang::attr::HLSLCall:
-        Indent(Indentation, Out);
-        Out << "[call]\n";
-        break;
-
-      case clang::attr::HLSLFastOpt:
-        Indent(Indentation, Out);
-        Out << "[fastopt]\n";
-        break;
-
-      case clang::attr::HLSLFlatten:
-        Indent(Indentation, Out);
-        Out << "[flatten]\n";
-        break;
-
-      case clang::attr::HLSLForceCase:
-        Indent(Indentation, Out);
-        Out << "[forcecase]\n";
-        break;
-
-      case clang::attr::HLSLLoop:
-        Indent(Indentation, Out);
-        Out << "[loop]\n";
-        break;
-
-      case clang::attr::HLSLUnroll: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLUnrollAttr *ACast = static_cast<HLSLUnrollAttr *>(noconst);
-        Indent(Indentation, Out);
-        if (ACast->getCount() == 0)
-          Out << "[unroll]\n";
-        else
-          Out << "[unroll(" << ACast->getCount() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLWaveSize: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLWaveSizeAttr *ACast = static_cast<HLSLWaveSizeAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[wavesize(" << ACast->getSize() << ")]\n";
-        break;
-      }
-
-      // Variable modifiers
-      case clang::attr::HLSLGroupShared:
-        Out << "groupshared ";
-        break;
-
-      case clang::attr::HLSLPrecise:
-        Out << "precise ";
-        break;
-
-      case clang::attr::HLSLSemantic: // TODO: Consider removing HLSLSemantic
-                                      // attribute
-        break;
-
-      case clang::attr::HLSLShared:
-        Out << "shared ";
-        break;
-
-      case clang::attr::HLSLUniform:
-        Out << "uniform ";
-        break;
-
-      // These four cases are printed in TypePrinter::printAttributedBefore
-      case clang::attr::HLSLSnorm:
-      case clang::attr::HLSLUnorm:
-        break;
-
-      case clang::attr::HLSLPoint:
-        Out << "point ";
-        break;
-
-      case clang::attr::HLSLLine:
-        Out << "line ";
-        break;
-
-      case clang::attr::HLSLLineAdj:
-        Out << "lineadj ";
-        break;
-
-      case clang::attr::HLSLTriangle:
-        Out << "triangle ";
-        break;
-
-      case clang::attr::HLSLTriangleAdj:
-        Out << "triangleadj ";
-        break;
-
-      case clang::attr::HLSLGloballyCoherent:
-        Out << "globallycoherent ";
-        break;
-
-      case clang::attr::HLSLIndices:
-        Out << "indices ";
-        break;
-
-      case clang::attr::HLSLVertices:
-        Out << "vertices ";
-        break;
-
-      case clang::attr::HLSLPrimitives:
-        Out << "primitives ";
-        break;
-
-      case clang::attr::HLSLPayload:
-        Out << "payload ";
-        break;
-
-      case clang::attr::HLSLNodeLaunch: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLNodeLaunchAttr *ACast = static_cast<HLSLNodeLaunchAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[NodeLaunch(\"" << ACast->getLaunchType() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLNodeIsProgramEntry:
-        Indent(Indentation, Out);
-        Out << "[NodeIsProgramEntry]\n";
-        break;
-
-      case clang::attr::HLSLNodeId: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLNodeIdAttr *ACast = static_cast<HLSLNodeIdAttr *>(noconst);
-        Indent(Indentation, Out);
-        if (ACast->getArrayIndex() > 0)
-          Out << "[NodeId(\"" << ACast->getName() << "\","
-              << ACast->getArrayIndex() << ")]\n";
-        else
-          Out << "[NodeId(\"" << ACast->getName() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLNodeLocalRootArgumentsTableIndex: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLNodeLocalRootArgumentsTableIndexAttr *ACast =
-            static_cast<HLSLNodeLocalRootArgumentsTableIndexAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[NodeLocalRootTableIndex(" << ACast->getIndex() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLNodeShareInputOf: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLNodeShareInputOfAttr *ACast =
-            static_cast<HLSLNodeShareInputOfAttr *>(noconst);
-        Indent(Indentation, Out);
-        if (ACast->getArrayIndex() > 0)
-          Out << "[NodeShareInputOf(\"" << ACast->getName() << "\","
-              << ACast->getArrayIndex() << ")]\n";
-        else
-          Out << "[NodeShareInputOf(\"" << ACast->getName() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLNodeTrackRWInputSharing: {
-        Indent(Indentation, Out);
-        Out << "[NodeTrackRWInputSharing]\n";
-        break;
-      }
-
-      case clang::attr::HLSLNodeDispatchGrid: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLNodeDispatchGridAttr *ACast =
-            static_cast<HLSLNodeDispatchGridAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[NodeDispatchGrid(" << ACast->getX() << ", " << ACast->getY()
-            << ", " << ACast->getZ() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLNodeMaxDispatchGrid: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLNodeMaxDispatchGridAttr *ACast =
-            static_cast<HLSLNodeMaxDispatchGridAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[NodeMaxDispatchGrid(" << ACast->getX() << ", " << ACast->getY()
-            << ", " << ACast->getZ() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLNodeMaxRecursionDepth: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLNodeMaxRecursionDepthAttr *ACast =
-            static_cast<HLSLNodeMaxRecursionDepthAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[NodeMaxRecursionDepth(" << ACast->getCount() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLMaxRecords: {
-        Attr *noconst = const_cast<Attr *>(A);
-        auto *ACast = static_cast<HLSLMaxRecordsAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[MaxRecords(" << ACast->getMaxCount() << ")]\n";
-        break;
-      }
-      case clang::attr::HLSLNodeArraySize: {
-        Attr *noconst = const_cast<Attr *>(A);
-        auto *ACast = static_cast<HLSLNodeArraySizeAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[NodeArraySize(" << ACast->getCount() << ")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLMaxRecordsSharedWith: {
-        Attr *noconst = const_cast<Attr *>(A);
-        HLSLMaxRecordsSharedWithAttr *ACast =
-            static_cast<HLSLMaxRecordsSharedWithAttr *>(noconst);
-        Indent(Indentation, Out);
-        Out << "[MaxRecordsSharedWith(\"" << ACast->getName() << "\")]\n";
-        break;
-      }
-
-      case clang::attr::HLSLAllowSparseNodes: {
-        Indent(Indentation, Out);
-        Out << "[AllowSparseNodes]\n";
-        break;
-      }
-
-      default:
-        A->printPretty(Out, Policy);
-        break;
+      if (const auto *TagTy = Ty->getAs<TagType>()) {
+        if (const auto *SpecDecl =
+                dyn_cast_or_null<ClassTemplateSpecializationDecl>(
+                    TagTy->getDecl()))
+          return SpecDecl->getTemplateArgs()[0].getAsType();
       }
     }
+    return QualType();
+  }
 
-    bool hlsl::IsHLSLAttr(clang::attr::Kind AttrKind) {
-      switch (AttrKind) {
-      case clang::attr::HLSLAllowUAVCondition:
-      case clang::attr::HLSLBranch:
-      case clang::attr::HLSLCall:
-      case clang::attr::HLSLCentroid:
-      case clang::attr::HLSLClipPlanes:
-      case clang::attr::HLSLDomain:
-      case clang::attr::HLSLEarlyDepthStencil:
-      case clang::attr::HLSLFastOpt:
-      case clang::attr::HLSLFlatten:
-      case clang::attr::HLSLForceCase:
-      case clang::attr::HLSLGroupShared:
-      case clang::attr::HLSLIn:
-      case clang::attr::HLSLInOut:
-      case clang::attr::HLSLInstance:
-      case clang::attr::HLSLLinear:
-      case clang::attr::HLSLCenter:
-      case clang::attr::HLSLLoop:
-      case clang::attr::HLSLMaxTessFactor:
-      case clang::attr::HLSLNoInterpolation:
-      case clang::attr::HLSLNoPerspective:
-      case clang::attr::HLSLNumThreads:
-      case clang::attr::HLSLRootSignature:
-      case clang::attr::HLSLOut:
-      case clang::attr::HLSLOutputControlPoints:
-      case clang::attr::HLSLOutputTopology:
-      case clang::attr::HLSLPartitioning:
-      case clang::attr::HLSLPatchConstantFunc:
-      case clang::attr::HLSLMaxVertexCount:
-      case clang::attr::HLSLPrecise:
-      case clang::attr::HLSLSample:
-      case clang::attr::HLSLSemantic:
-      case clang::attr::HLSLShader:
-      case clang::attr::HLSLShared:
-      case clang::attr::HLSLSnorm:
-      case clang::attr::HLSLUniform:
-      case clang::attr::HLSLUnorm:
-      case clang::attr::HLSLUnroll:
-      case clang::attr::HLSLPoint:
-      case clang::attr::HLSLLine:
-      case clang::attr::HLSLLineAdj:
-      case clang::attr::HLSLTriangle:
-      case clang::attr::HLSLTriangleAdj:
-      case clang::attr::HLSLGloballyCoherent:
-      case clang::attr::HLSLIndices:
-      case clang::attr::HLSLVertices:
-      case clang::attr::HLSLPrimitives:
-      case clang::attr::HLSLPayload:
-      case clang::attr::NoInline:
-      case clang::attr::HLSLExport:
-      case clang::attr::HLSLWaveSensitive:
-      case clang::attr::HLSLWaveSize:
-      case clang::attr::HLSLMaxRecordsSharedWith:
-      case clang::attr::HLSLMaxRecords:
-      case clang::attr::HLSLNodeArraySize:
-      case clang::attr::HLSLAllowSparseNodes:
-      case clang::attr::HLSLNodeDispatchGrid:
-      case clang::attr::HLSLNodeMaxDispatchGrid:
-      case clang::attr::HLSLNodeMaxRecursionDepth:
-      case clang::attr::HLSLNodeId:
-      case clang::attr::HLSLNodeIsProgramEntry:
-      case clang::attr::HLSLNodeLaunch:
-      case clang::attr::HLSLNodeLocalRootArgumentsTableIndex:
-      case clang::attr::HLSLNodeShareInputOf:
-      case clang::attr::HLSLNodeTrackRWInputSharing:
-      case clang::attr::VKBinding:
-      case clang::attr::VKBuiltIn:
-      case clang::attr::VKConstantId:
-      case clang::attr::VKCounterBinding:
-      case clang::attr::VKIndex:
-      case clang::attr::VKInputAttachmentIndex:
-      case clang::attr::VKLocation:
-      case clang::attr::VKOffset:
-      case clang::attr::VKPushConstant:
-      case clang::attr::VKShaderRecordNV:
-      case clang::attr::VKShaderRecordEXT:
-        return true;
-      default:
-        // Only HLSL/VK Attributes return true. Only used for printPretty(),
-        // which doesn't support them.
+  /// <summary>Get element type, preserving AttributedType, if vector or
+  /// matrix, otherwise return the type unmodified.</summary> <param
+  /// name="self">Sema with context.</param> <param name="type">Input
+  /// type.</param>
+  clang::QualType hlsl::GetOriginalElementType(clang::Sema * self,
+                                               clang::QualType type) {
+    ArTypeObjectKind Kind =
+        HLSLExternalSource::FromSema(self)->GetTypeObjectKind(type);
+    if (Kind == AR_TOBJ_MATRIX || Kind == AR_TOBJ_VECTOR) {
+      return GetOriginalMatrixOrVectorElementType(type);
+    }
+    return type;
+  }
+
+  void hlsl::CustomPrintHLSLAttr(const clang::Attr *A, llvm::raw_ostream &Out,
+                                 const clang::PrintingPolicy &Policy,
+                                 unsigned int Indentation) {
+    switch (A->getKind()) {
+
+    // Parameter modifiers
+    case clang::attr::HLSLIn:
+      Out << "in ";
+      break;
+
+    case clang::attr::HLSLInOut:
+      Out << "inout ";
+      break;
+
+    case clang::attr::HLSLOut:
+      Out << "out ";
+      break;
+
+    // Interpolation modifiers
+    case clang::attr::HLSLLinear:
+      Out << "linear ";
+      break;
+
+    case clang::attr::HLSLCenter:
+      Out << "center ";
+      break;
+
+    case clang::attr::HLSLCentroid:
+      Out << "centroid ";
+      break;
+
+    case clang::attr::HLSLNoInterpolation:
+      Out << "nointerpolation ";
+      break;
+
+    case clang::attr::HLSLNoPerspective:
+      Out << "noperspective ";
+      break;
+
+    case clang::attr::HLSLSample:
+      Out << "sample ";
+      break;
+
+    // Function attributes
+    case clang::attr::HLSLClipPlanes: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLClipPlanesAttr *ACast = static_cast<HLSLClipPlanesAttr *>(noconst);
+
+      if (!ACast->getClipPlane1())
         break;
-      }
 
-      return false;
+      Indent(Indentation, Out);
+      Out << "[clipplanes(";
+      ACast->getClipPlane1()->printPretty(Out, 0, Policy);
+      PrintClipPlaneIfPresent(ACast->getClipPlane2(), Out, Policy);
+      PrintClipPlaneIfPresent(ACast->getClipPlane3(), Out, Policy);
+      PrintClipPlaneIfPresent(ACast->getClipPlane4(), Out, Policy);
+      PrintClipPlaneIfPresent(ACast->getClipPlane5(), Out, Policy);
+      PrintClipPlaneIfPresent(ACast->getClipPlane6(), Out, Policy);
+      Out << ")]\n";
+
+      break;
     }
 
-    void hlsl::PrintClipPlaneIfPresent(clang::Expr * ClipPlane,
-                                       llvm::raw_ostream & Out,
-                                       const clang::PrintingPolicy &Policy) {
-      if (ClipPlane) {
-        Out << ", ";
-        ClipPlane->printPretty(Out, 0, Policy);
-      }
+    case clang::attr::HLSLDomain: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLDomainAttr *ACast = static_cast<HLSLDomainAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[domain(\"" << ACast->getDomainType() << "\")]\n";
+      break;
     }
 
-    bool hlsl::IsObjectType(clang::Sema * self, clang::QualType type,
-                            bool *isDeprecatedEffectObject) {
-      HLSLExternalSource *pExternalSource = HLSLExternalSource::FromSema(self);
-      if (pExternalSource &&
-          pExternalSource->GetTypeObjectKind(type) == AR_TOBJ_OBJECT) {
-        if (isDeprecatedEffectObject)
-          *isDeprecatedEffectObject = pExternalSource->GetTypeElementKind(
-                                          type) == AR_OBJECT_LEGACY_EFFECT;
-        return true;
-      }
+    case clang::attr::HLSLEarlyDepthStencil:
+      Indent(Indentation, Out);
+      Out << "[earlydepthstencil]\n";
+      break;
+
+    case clang::attr::HLSLInstance: // TODO - test
+    {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLInstanceAttr *ACast = static_cast<HLSLInstanceAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[instance(" << ACast->getCount() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLMaxTessFactor: // TODO - test
+    {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLMaxTessFactorAttr *ACast =
+          static_cast<HLSLMaxTessFactorAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[maxtessfactor(" << ACast->getFactor() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLNumThreads: // TODO - test
+    {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLNumThreadsAttr *ACast = static_cast<HLSLNumThreadsAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[numthreads(" << ACast->getX() << ", " << ACast->getY() << ", "
+          << ACast->getZ() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLRootSignature: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLRootSignatureAttr *ACast =
+          static_cast<HLSLRootSignatureAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[RootSignature(\"" << ACast->getSignatureName() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLOutputControlPoints: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLOutputControlPointsAttr *ACast =
+          static_cast<HLSLOutputControlPointsAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[outputcontrolpoints(" << ACast->getCount() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLOutputTopology: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLOutputTopologyAttr *ACast =
+          static_cast<HLSLOutputTopologyAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[outputtopology(\"" << ACast->getTopology() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLPartitioning: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLPartitioningAttr *ACast =
+          static_cast<HLSLPartitioningAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[partitioning(\"" << ACast->getScheme() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLPatchConstantFunc: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLPatchConstantFuncAttr *ACast =
+          static_cast<HLSLPatchConstantFuncAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[patchconstantfunc(\"" << ACast->getFunctionName() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLShader: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLShaderAttr *ACast = static_cast<HLSLShaderAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[shader(\"" << ACast->getStage() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLExperimental: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLExperimentalAttr *ACast =
+          static_cast<HLSLExperimentalAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[experimental(\"" << ACast->getName() << "\", \""
+          << ACast->getValue() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLMaxVertexCount: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLMaxVertexCountAttr *ACast =
+          static_cast<HLSLMaxVertexCountAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[maxvertexcount(" << ACast->getCount() << ")]\n";
+      break;
+    }
+
+    case clang::attr::NoInline:
+      Indent(Indentation, Out);
+      Out << "[noinline]\n";
+      break;
+
+    case clang::attr::HLSLExport:
+      Indent(Indentation, Out);
+      Out << "export\n";
+      break;
+
+      // Statement attributes
+    case clang::attr::HLSLAllowUAVCondition:
+      Indent(Indentation, Out);
+      Out << "[allow_uav_condition]\n";
+      break;
+
+    case clang::attr::HLSLBranch:
+      Indent(Indentation, Out);
+      Out << "[branch]\n";
+      break;
+
+    case clang::attr::HLSLCall:
+      Indent(Indentation, Out);
+      Out << "[call]\n";
+      break;
+
+    case clang::attr::HLSLFastOpt:
+      Indent(Indentation, Out);
+      Out << "[fastopt]\n";
+      break;
+
+    case clang::attr::HLSLFlatten:
+      Indent(Indentation, Out);
+      Out << "[flatten]\n";
+      break;
+
+    case clang::attr::HLSLForceCase:
+      Indent(Indentation, Out);
+      Out << "[forcecase]\n";
+      break;
+
+    case clang::attr::HLSLLoop:
+      Indent(Indentation, Out);
+      Out << "[loop]\n";
+      break;
+
+    case clang::attr::HLSLUnroll: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLUnrollAttr *ACast = static_cast<HLSLUnrollAttr *>(noconst);
+      Indent(Indentation, Out);
+      if (ACast->getCount() == 0)
+        Out << "[unroll]\n";
+      else
+        Out << "[unroll(" << ACast->getCount() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLWaveSize: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLWaveSizeAttr *ACast = static_cast<HLSLWaveSizeAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[wavesize(" << ACast->getSize() << ")]\n";
+      break;
+    }
+
+    // Variable modifiers
+    case clang::attr::HLSLGroupShared:
+      Out << "groupshared ";
+      break;
+
+    case clang::attr::HLSLPrecise:
+      Out << "precise ";
+      break;
+
+    case clang::attr::HLSLSemantic: // TODO: Consider removing HLSLSemantic
+                                    // attribute
+      break;
+
+    case clang::attr::HLSLShared:
+      Out << "shared ";
+      break;
+
+    case clang::attr::HLSLUniform:
+      Out << "uniform ";
+      break;
+
+    // These four cases are printed in TypePrinter::printAttributedBefore
+    case clang::attr::HLSLSnorm:
+    case clang::attr::HLSLUnorm:
+      break;
+
+    case clang::attr::HLSLPoint:
+      Out << "point ";
+      break;
+
+    case clang::attr::HLSLLine:
+      Out << "line ";
+      break;
+
+    case clang::attr::HLSLLineAdj:
+      Out << "lineadj ";
+      break;
+
+    case clang::attr::HLSLTriangle:
+      Out << "triangle ";
+      break;
+
+    case clang::attr::HLSLTriangleAdj:
+      Out << "triangleadj ";
+      break;
+
+    case clang::attr::HLSLGloballyCoherent:
+      Out << "globallycoherent ";
+      break;
+
+    case clang::attr::HLSLIndices:
+      Out << "indices ";
+      break;
+
+    case clang::attr::HLSLVertices:
+      Out << "vertices ";
+      break;
+
+    case clang::attr::HLSLPrimitives:
+      Out << "primitives ";
+      break;
+
+    case clang::attr::HLSLPayload:
+      Out << "payload ";
+      break;
+
+    case clang::attr::HLSLNodeLaunch: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLNodeLaunchAttr *ACast = static_cast<HLSLNodeLaunchAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[NodeLaunch(\"" << ACast->getLaunchType() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLNodeIsProgramEntry:
+      Indent(Indentation, Out);
+      Out << "[NodeIsProgramEntry]\n";
+      break;
+
+    case clang::attr::HLSLNodeId: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLNodeIdAttr *ACast = static_cast<HLSLNodeIdAttr *>(noconst);
+      Indent(Indentation, Out);
+      if (ACast->getArrayIndex() > 0)
+        Out << "[NodeId(\"" << ACast->getName() << "\","
+            << ACast->getArrayIndex() << ")]\n";
+      else
+        Out << "[NodeId(\"" << ACast->getName() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLNodeLocalRootArgumentsTableIndex: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLNodeLocalRootArgumentsTableIndexAttr *ACast =
+          static_cast<HLSLNodeLocalRootArgumentsTableIndexAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[NodeLocalRootTableIndex(" << ACast->getIndex() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLNodeShareInputOf: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLNodeShareInputOfAttr *ACast =
+          static_cast<HLSLNodeShareInputOfAttr *>(noconst);
+      Indent(Indentation, Out);
+      if (ACast->getArrayIndex() > 0)
+        Out << "[NodeShareInputOf(\"" << ACast->getName() << "\","
+            << ACast->getArrayIndex() << ")]\n";
+      else
+        Out << "[NodeShareInputOf(\"" << ACast->getName() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLNodeTrackRWInputSharing: {
+      Indent(Indentation, Out);
+      Out << "[NodeTrackRWInputSharing]\n";
+      break;
+    }
+
+    case clang::attr::HLSLNodeDispatchGrid: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLNodeDispatchGridAttr *ACast =
+          static_cast<HLSLNodeDispatchGridAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[NodeDispatchGrid(" << ACast->getX() << ", " << ACast->getY()
+          << ", " << ACast->getZ() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLNodeMaxDispatchGrid: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLNodeMaxDispatchGridAttr *ACast =
+          static_cast<HLSLNodeMaxDispatchGridAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[NodeMaxDispatchGrid(" << ACast->getX() << ", " << ACast->getY()
+          << ", " << ACast->getZ() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLNodeMaxRecursionDepth: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLNodeMaxRecursionDepthAttr *ACast =
+          static_cast<HLSLNodeMaxRecursionDepthAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[NodeMaxRecursionDepth(" << ACast->getCount() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLMaxRecords: {
+      Attr *noconst = const_cast<Attr *>(A);
+      auto *ACast = static_cast<HLSLMaxRecordsAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[MaxRecords(" << ACast->getMaxCount() << ")]\n";
+      break;
+    }
+    case clang::attr::HLSLNodeArraySize: {
+      Attr *noconst = const_cast<Attr *>(A);
+      auto *ACast = static_cast<HLSLNodeArraySizeAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[NodeArraySize(" << ACast->getCount() << ")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLMaxRecordsSharedWith: {
+      Attr *noconst = const_cast<Attr *>(A);
+      HLSLMaxRecordsSharedWithAttr *ACast =
+          static_cast<HLSLMaxRecordsSharedWithAttr *>(noconst);
+      Indent(Indentation, Out);
+      Out << "[MaxRecordsSharedWith(\"" << ACast->getName() << "\")]\n";
+      break;
+    }
+
+    case clang::attr::HLSLAllowSparseNodes: {
+      Indent(Indentation, Out);
+      Out << "[AllowSparseNodes]\n";
+      break;
+    }
+
+    default:
+      A->printPretty(Out, Policy);
+      break;
+    }
+  }
+
+  bool hlsl::IsHLSLAttr(clang::attr::Kind AttrKind) {
+    switch (AttrKind) {
+    case clang::attr::HLSLAllowUAVCondition:
+    case clang::attr::HLSLBranch:
+    case clang::attr::HLSLCall:
+    case clang::attr::HLSLCentroid:
+    case clang::attr::HLSLClipPlanes:
+    case clang::attr::HLSLDomain:
+    case clang::attr::HLSLEarlyDepthStencil:
+    case clang::attr::HLSLFastOpt:
+    case clang::attr::HLSLFlatten:
+    case clang::attr::HLSLForceCase:
+    case clang::attr::HLSLGroupShared:
+    case clang::attr::HLSLIn:
+    case clang::attr::HLSLInOut:
+    case clang::attr::HLSLInstance:
+    case clang::attr::HLSLLinear:
+    case clang::attr::HLSLCenter:
+    case clang::attr::HLSLLoop:
+    case clang::attr::HLSLMaxTessFactor:
+    case clang::attr::HLSLNoInterpolation:
+    case clang::attr::HLSLNoPerspective:
+    case clang::attr::HLSLNumThreads:
+    case clang::attr::HLSLRootSignature:
+    case clang::attr::HLSLOut:
+    case clang::attr::HLSLOutputControlPoints:
+    case clang::attr::HLSLOutputTopology:
+    case clang::attr::HLSLPartitioning:
+    case clang::attr::HLSLPatchConstantFunc:
+    case clang::attr::HLSLMaxVertexCount:
+    case clang::attr::HLSLPrecise:
+    case clang::attr::HLSLSample:
+    case clang::attr::HLSLSemantic:
+    case clang::attr::HLSLShader:
+    case clang::attr::HLSLShared:
+    case clang::attr::HLSLSnorm:
+    case clang::attr::HLSLUniform:
+    case clang::attr::HLSLUnorm:
+    case clang::attr::HLSLUnroll:
+    case clang::attr::HLSLPoint:
+    case clang::attr::HLSLLine:
+    case clang::attr::HLSLLineAdj:
+    case clang::attr::HLSLTriangle:
+    case clang::attr::HLSLTriangleAdj:
+    case clang::attr::HLSLGloballyCoherent:
+    case clang::attr::HLSLIndices:
+    case clang::attr::HLSLVertices:
+    case clang::attr::HLSLPrimitives:
+    case clang::attr::HLSLPayload:
+    case clang::attr::NoInline:
+    case clang::attr::HLSLExport:
+    case clang::attr::HLSLWaveSensitive:
+    case clang::attr::HLSLWaveSize:
+    case clang::attr::HLSLMaxRecordsSharedWith:
+    case clang::attr::HLSLMaxRecords:
+    case clang::attr::HLSLNodeArraySize:
+    case clang::attr::HLSLAllowSparseNodes:
+    case clang::attr::HLSLNodeDispatchGrid:
+    case clang::attr::HLSLNodeMaxDispatchGrid:
+    case clang::attr::HLSLNodeMaxRecursionDepth:
+    case clang::attr::HLSLNodeId:
+    case clang::attr::HLSLNodeIsProgramEntry:
+    case clang::attr::HLSLNodeLaunch:
+    case clang::attr::HLSLNodeLocalRootArgumentsTableIndex:
+    case clang::attr::HLSLNodeShareInputOf:
+    case clang::attr::HLSLNodeTrackRWInputSharing:
+    case clang::attr::VKBinding:
+    case clang::attr::VKBuiltIn:
+    case clang::attr::VKConstantId:
+    case clang::attr::VKCounterBinding:
+    case clang::attr::VKIndex:
+    case clang::attr::VKInputAttachmentIndex:
+    case clang::attr::VKLocation:
+    case clang::attr::VKOffset:
+    case clang::attr::VKPushConstant:
+    case clang::attr::VKShaderRecordNV:
+    case clang::attr::VKShaderRecordEXT:
+      return true;
+    default:
+      // Only HLSL/VK Attributes return true. Only used for printPretty(),
+      // which doesn't support them.
+      break;
+    }
+
+    return false;
+  }
+
+  void hlsl::PrintClipPlaneIfPresent(clang::Expr * ClipPlane,
+                                     llvm::raw_ostream & Out,
+                                     const clang::PrintingPolicy &Policy) {
+    if (ClipPlane) {
+      Out << ", ";
+      ClipPlane->printPretty(Out, 0, Policy);
+    }
+  }
+
+  bool hlsl::IsObjectType(clang::Sema * self, clang::QualType type,
+                          bool *isDeprecatedEffectObject) {
+    HLSLExternalSource *pExternalSource = HLSLExternalSource::FromSema(self);
+    if (pExternalSource &&
+        pExternalSource->GetTypeObjectKind(type) == AR_TOBJ_OBJECT) {
       if (isDeprecatedEffectObject)
-        *isDeprecatedEffectObject = false;
+        *isDeprecatedEffectObject = pExternalSource->GetTypeElementKind(type) ==
+                                    AR_OBJECT_LEGACY_EFFECT;
+      return true;
+    }
+    if (isDeprecatedEffectObject)
+      *isDeprecatedEffectObject = false;
+    return false;
+  }
+
+  bool hlsl::CanConvert(clang::Sema * self, clang::SourceLocation loc,
+                        clang::Expr * sourceExpr, clang::QualType target,
+                        bool explicitConversion,
+                        clang::StandardConversionSequence *standard) {
+    return HLSLExternalSource::FromSema(self)->CanConvert(
+        loc, sourceExpr, target, explicitConversion, nullptr, standard);
+  }
+
+  void hlsl::Indent(unsigned int Indentation, llvm::raw_ostream &Out) {
+    for (unsigned i = 0; i != Indentation; ++i)
+      Out << "  ";
+  }
+
+  void hlsl::RegisterIntrinsicTable(clang::ExternalSemaSource * self,
+                                    IDxcIntrinsicTable * table) {
+    DXASSERT_NOMSG(self != nullptr);
+    DXASSERT_NOMSG(table != nullptr);
+
+    HLSLExternalSource *source = (HLSLExternalSource *)self;
+    source->RegisterIntrinsicTable(table);
+  }
+
+  clang::QualType hlsl::CheckVectorConditional(
+      clang::Sema * self, clang::ExprResult & Cond, clang::ExprResult & LHS,
+      clang::ExprResult & RHS, clang::SourceLocation QuestionLoc) {
+    return HLSLExternalSource::FromSema(self)->CheckVectorConditional(
+        Cond, LHS, RHS, QuestionLoc);
+  }
+
+  bool IsTypeNumeric(clang::Sema * self, clang::QualType & type) {
+    UINT count;
+    return HLSLExternalSource::FromSema(self)->IsTypeNumeric(type, &count);
+  }
+
+  void Sema::CheckHLSLArrayAccess(const Expr *expr) {
+    DXASSERT_NOMSG(isa<CXXOperatorCallExpr>(expr));
+    const CXXOperatorCallExpr *OperatorCallExpr =
+        cast<CXXOperatorCallExpr>(expr);
+    DXASSERT_NOMSG(OperatorCallExpr->getOperator() ==
+                   OverloadedOperatorKind::OO_Subscript);
+
+    const Expr *RHS = OperatorCallExpr->getArg(1); // first subscript expression
+    llvm::APSInt index;
+    if (RHS->EvaluateAsInt(index, Context)) {
+      int64_t intIndex = index.getLimitedValue();
+      const QualType LHSQualType = OperatorCallExpr->getArg(0)->getType();
+      if (IsVectorType(this, LHSQualType)) {
+        uint32_t vectorSize = GetHLSLVecSize(LHSQualType);
+        // If expression is a double two subscript operator for matrix (e.g
+        // x[0][1]) we also have to check the first subscript oprator by
+        // recursively calling this funciton for the first CXXOperatorCallExpr
+        if (isa<CXXOperatorCallExpr>(OperatorCallExpr->getArg(0))) {
+          const CXXOperatorCallExpr *object =
+              cast<CXXOperatorCallExpr>(OperatorCallExpr->getArg(0));
+          if (object->getOperator() == OverloadedOperatorKind::OO_Subscript) {
+            CheckHLSLArrayAccess(object);
+          }
+        }
+        if (intIndex < 0 || (uint32_t)intIndex >= vectorSize) {
+          Diag(RHS->getExprLoc(),
+               diag::err_hlsl_vector_element_index_out_of_bounds)
+              << (int)intIndex;
+        }
+      } else if (IsMatrixType(this, LHSQualType)) {
+        uint32_t rowCount, colCount;
+        GetHLSLMatRowColCount(LHSQualType, rowCount, colCount);
+        if (intIndex < 0 || (uint32_t)intIndex >= rowCount) {
+          Diag(RHS->getExprLoc(), diag::err_hlsl_matrix_row_index_out_of_bounds)
+              << (int)intIndex;
+        }
+      }
+    }
+  }
+
+  clang::QualType ApplyTypeSpecSignToParsedType(
+      clang::Sema * self, clang::QualType & type, clang::TypeSpecifierSign TSS,
+      clang::SourceLocation Loc) {
+    return HLSLExternalSource::FromSema(self)->ApplyTypeSpecSignToParsedType(
+        type, TSS, Loc);
+  }
+
+  QualType Sema::getHLSLDefaultSpecialization(TemplateDecl * Decl) {
+    if (Decl->getTemplateParameters()->getMinRequiredArguments() == 0) {
+      TemplateArgumentListInfo EmptyArgs;
+      EmptyArgs.setLAngleLoc(Decl->getSourceRange().getEnd());
+      EmptyArgs.setRAngleLoc(Decl->getSourceRange().getEnd());
+      return CheckTemplateIdType(TemplateName(Decl),
+                                 Decl->getSourceRange().getEnd(), EmptyArgs);
+    }
+    return QualType();
+  }
+
+  namespace hlsl {
+
+  static bool nodeInputIsCompatible(DXIL::NodeIOKind IOType,
+                                    DXIL::NodeLaunchType launchType) {
+    switch (IOType) {
+    case DXIL::NodeIOKind::DispatchNodeInputRecord:
+    case DXIL::NodeIOKind::RWDispatchNodeInputRecord:
+      return launchType == DXIL::NodeLaunchType::Broadcasting;
+
+    case DXIL::NodeIOKind::GroupNodeInputRecords:
+    case DXIL::NodeIOKind::RWGroupNodeInputRecords:
+    case DXIL::NodeIOKind::EmptyInput:
+      return launchType == DXIL::NodeLaunchType::Coalescing;
+
+    case DXIL::NodeIOKind::ThreadNodeInputRecord:
+    case DXIL::NodeIOKind::RWThreadNodeInputRecord:
+      return launchType == DXIL::NodeLaunchType::Thread;
+
+    default:
       return false;
     }
+  }
 
-    bool hlsl::CanConvert(clang::Sema * self, clang::SourceLocation loc,
-                          clang::Expr * sourceExpr, clang::QualType target,
-                          bool explicitConversion,
-                          clang::StandardConversionSequence *standard) {
-      return HLSLExternalSource::FromSema(self)->CanConvert(
-          loc, sourceExpr, target, explicitConversion, nullptr, standard);
-    }
-
-    void hlsl::Indent(unsigned int Indentation, llvm::raw_ostream &Out) {
-      for (unsigned i = 0; i != Indentation; ++i)
-        Out << "  ";
-    }
-
-    void hlsl::RegisterIntrinsicTable(clang::ExternalSemaSource * self,
-                                      IDxcIntrinsicTable * table) {
-      DXASSERT_NOMSG(self != nullptr);
-      DXASSERT_NOMSG(table != nullptr);
-
-      HLSLExternalSource *source = (HLSLExternalSource *)self;
-      source->RegisterIntrinsicTable(table);
-    }
-
-    clang::QualType hlsl::CheckVectorConditional(
-        clang::Sema * self, clang::ExprResult & Cond, clang::ExprResult & LHS,
-        clang::ExprResult & RHS, clang::SourceLocation QuestionLoc) {
-      return HLSLExternalSource::FromSema(self)->CheckVectorConditional(
-          Cond, LHS, RHS, QuestionLoc);
-    }
-
-    bool IsTypeNumeric(clang::Sema * self, clang::QualType & type) {
-      UINT count;
-      return HLSLExternalSource::FromSema(self)->IsTypeNumeric(type, &count);
-    }
-
-    void Sema::CheckHLSLArrayAccess(const Expr *expr) {
-      DXASSERT_NOMSG(isa<CXXOperatorCallExpr>(expr));
-      const CXXOperatorCallExpr *OperatorCallExpr =
-          cast<CXXOperatorCallExpr>(expr);
-      DXASSERT_NOMSG(OperatorCallExpr->getOperator() ==
-                     OverloadedOperatorKind::OO_Subscript);
-
-      const Expr *RHS =
-          OperatorCallExpr->getArg(1); // first subscript expression
-      llvm::APSInt index;
-      if (RHS->EvaluateAsInt(index, Context)) {
-        int64_t intIndex = index.getLimitedValue();
-        const QualType LHSQualType = OperatorCallExpr->getArg(0)->getType();
-        if (IsVectorType(this, LHSQualType)) {
-          uint32_t vectorSize = GetHLSLVecSize(LHSQualType);
-          // If expression is a double two subscript operator for matrix (e.g
-          // x[0][1]) we also have to check the first subscript oprator by
-          // recursively calling this funciton for the first CXXOperatorCallExpr
-          if (isa<CXXOperatorCallExpr>(OperatorCallExpr->getArg(0))) {
-            const CXXOperatorCallExpr *object =
-                cast<CXXOperatorCallExpr>(OperatorCallExpr->getArg(0));
-            if (object->getOperator() == OverloadedOperatorKind::OO_Subscript) {
-              CheckHLSLArrayAccess(object);
-            }
-          }
-          if (intIndex < 0 || (uint32_t)intIndex >= vectorSize) {
-            Diag(RHS->getExprLoc(),
-                 diag::err_hlsl_vector_element_index_out_of_bounds)
-                << (int)intIndex;
-          }
-        } else if (IsMatrixType(this, LHSQualType)) {
-          uint32_t rowCount, colCount;
-          GetHLSLMatRowColCount(LHSQualType, rowCount, colCount);
-          if (intIndex < 0 || (uint32_t)intIndex >= rowCount) {
-            Diag(RHS->getExprLoc(),
-                 diag::err_hlsl_matrix_row_index_out_of_bounds)
-                << (int)intIndex;
-          }
+  void DiagnoseComputeEntry(Sema &S, FunctionDecl *FD,
+                            llvm::StringRef StageName, bool isActiveEntry) {
+    if (isActiveEntry) {
+      if (auto WaveSizeAttr = FD->getAttr<HLSLWaveSizeAttr>()) {
+        std::string profile = S.getLangOpts().HLSLProfile;
+        const ShaderModel *SM = hlsl::ShaderModel::GetByName(profile.c_str());
+        if (!SM->IsSM66Plus()) {
+          S.Diags.Report(WaveSizeAttr->getRange().getBegin(),
+                         diag::err_hlsl_attribute_in_wrong_shader_model)
+              << "wavesize"
+              << "6.6";
         }
       }
     }
+  }
 
-    clang::QualType ApplyTypeSpecSignToParsedType(
-        clang::Sema * self, clang::QualType & type,
-        clang::TypeSpecifierSign TSS, clang::SourceLocation Loc) {
-      return HLSLExternalSource::FromSema(self)->ApplyTypeSpecSignToParsedType(
-          type, TSS, Loc);
+  void DiagnoseNodeEntry(Sema &S, FunctionDecl *FD, llvm::StringRef StageName,
+                         bool isActiveEntry) {
+
+    SourceLocation NodeLoc = SourceLocation();
+    SourceLocation NodeLaunchLoc = SourceLocation();
+    DXIL::NodeLaunchType NodeLaunchTy = DXIL::NodeLaunchType::Invalid;
+    unsigned InputCount = 0;
+
+    auto pAttr = FD->getAttr<HLSLShaderAttr>();
+    DXIL::ShaderKind shaderKind = ShaderModel::KindFromFullName(StageName);
+    if (shaderKind == DXIL::ShaderKind::Node) {
+      NodeLoc = pAttr->getLocation();
+    }
+    if (NodeLoc.isInvalid()) {
+      return;
     }
 
-    QualType Sema::getHLSLDefaultSpecialization(TemplateDecl * Decl) {
-      if (Decl->getTemplateParameters()->getMinRequiredArguments() == 0) {
-        TemplateArgumentListInfo EmptyArgs;
-        EmptyArgs.setLAngleLoc(Decl->getSourceRange().getEnd());
-        EmptyArgs.setRAngleLoc(Decl->getSourceRange().getEnd());
-        return CheckTemplateIdType(TemplateName(Decl),
-                                   Decl->getSourceRange().getEnd(), EmptyArgs);
-      }
-      return QualType();
+    // save NodeLaunch type for use later
+    if (auto NodeLaunchAttr = FD->getAttr<HLSLNodeLaunchAttr>()) {
+      NodeLaunchTy =
+          ShaderModel::NodeLaunchTypeFromName(NodeLaunchAttr->getLaunchType());
+      NodeLaunchLoc = NodeLaunchAttr->getLocation();
+    } else {
+      NodeLaunchTy = DXIL::NodeLaunchType::Broadcasting;
+      NodeLaunchLoc = SourceLocation();
     }
 
-    namespace hlsl {
-
-    static bool nodeInputIsCompatible(DXIL::NodeIOKind IOType,
-                                      DXIL::NodeLaunchType launchType) {
-      switch (IOType) {
-      case DXIL::NodeIOKind::DispatchNodeInputRecord:
-      case DXIL::NodeIOKind::RWDispatchNodeInputRecord:
-        return launchType == DXIL::NodeLaunchType::Broadcasting;
-
-      case DXIL::NodeIOKind::GroupNodeInputRecords:
-      case DXIL::NodeIOKind::RWGroupNodeInputRecords:
-      case DXIL::NodeIOKind::EmptyInput:
-        return launchType == DXIL::NodeLaunchType::Coalescing;
-
-      case DXIL::NodeIOKind::ThreadNodeInputRecord:
-      case DXIL::NodeIOKind::RWThreadNodeInputRecord:
-        return launchType == DXIL::NodeLaunchType::Thread;
-
-      default:
-        return false;
-      }
-    }
-
-    void DiagnoseComputeEntry(Sema &S, FunctionDecl *FD,
-                              llvm::StringRef StageName, bool isActiveEntry) {
-      if (isActiveEntry) {
-        if (auto WaveSizeAttr = FD->getAttr<HLSLWaveSizeAttr>()) {
-          std::string profile = S.getLangOpts().HLSLProfile;
-          const ShaderModel *SM = hlsl::ShaderModel::GetByName(profile.c_str());
-          if (!SM->IsSM66Plus()) {
-            S.Diags.Report(WaveSizeAttr->getRange().getBegin(),
-                           diag::err_hlsl_attribute_in_wrong_shader_model)
-                << "wavesize"
-                << "6.6";
-          }
-        }
-      }
-    }
-
-    void DiagnoseNodeEntry(Sema &S, FunctionDecl *FD, llvm::StringRef StageName,
-                           bool isActiveEntry) {
-
-      SourceLocation NodeLoc = SourceLocation();
-      SourceLocation NodeLaunchLoc = SourceLocation();
-      DXIL::NodeLaunchType NodeLaunchTy = DXIL::NodeLaunchType::Invalid;
-      unsigned InputCount = 0;
-
-      auto pAttr = FD->getAttr<HLSLShaderAttr>();
-      DXIL::ShaderKind shaderKind = ShaderModel::KindFromFullName(StageName);
-      if (shaderKind == DXIL::ShaderKind::Node) {
-        NodeLoc = pAttr->getLocation();
-      }
-      if (NodeLoc.isInvalid()) {
-        return;
-      }
-
-      // save NodeLaunch type for use later
-      if (auto NodeLaunchAttr = FD->getAttr<HLSLNodeLaunchAttr>()) {
-        NodeLaunchTy = ShaderModel::NodeLaunchTypeFromName(
-            NodeLaunchAttr->getLaunchType());
-        NodeLaunchLoc = NodeLaunchAttr->getLocation();
-      } else {
-        NodeLaunchTy = DXIL::NodeLaunchType::Broadcasting;
-        NodeLaunchLoc = SourceLocation();
-      }
-
-      // Check that if a Thread launch node has the NumThreads attribute the
-      // thread group size is (1,1,1)
-      if (NodeLaunchTy == DXIL::NodeLaunchType::Thread) {
-        if (auto NumThreads = FD->getAttr<HLSLNumThreadsAttr>()) {
-          if (NumThreads->getX() != 1 || NumThreads->getY() != 1 ||
-              NumThreads->getZ() != 1) {
-            S.Diags.Report(NumThreads->getLocation(),
-                           diag::err_hlsl_wg_thread_launch_group_size)
-                << NumThreads->getRange();
-            // Only output the note if the source location is valid
-            if (NodeLaunchLoc.isValid())
-              S.Diags.Report(NodeLaunchLoc, diag::note_defined_here)
-                  << "Launch type";
-          }
-        }
-      } else if (!FD->hasAttr<HLSLNumThreadsAttr>()) {
-        // All other launch types require the NumThreads attribute.
-        S.Diags.Report(FD->getLocation(), diag::err_hlsl_missing_node_attr)
-            << FD->getName() << ShaderModel::GetNodeLaunchTypeName(NodeLaunchTy)
-            << "numthreads";
-      }
-
-      if (isActiveEntry) {
-        if (auto WaveSizeAttr = FD->getAttr<HLSLWaveSizeAttr>()) {
-          std::string profile = S.getLangOpts().HLSLProfile;
-          const ShaderModel *SM = hlsl::ShaderModel::GetByName(profile.c_str());
-          if (!SM->IsSM66Plus()) {
-            S.Diags.Report(WaveSizeAttr->getRange().getBegin(),
-                           diag::err_hlsl_attribute_in_wrong_shader_model)
-                << "wavesize"
-                << "6.6";
-          }
-        }
-      }
-
-      auto *NodeDG = FD->getAttr<HLSLNodeDispatchGridAttr>();
-      auto *NodeMDG = FD->getAttr<HLSLNodeMaxDispatchGridAttr>();
-      if (NodeLaunchTy != DXIL::NodeLaunchType::Broadcasting) {
-        // NodeDispatchGrid is only valid for Broadcasting nodes
-        if (NodeDG) {
-          S.Diags.Report(NodeDG->getLocation(), diag::err_hlsl_launch_type_attr)
-              << NodeDG->getSpelling()
-              << ShaderModel::GetNodeLaunchTypeName(
-                     DXIL::NodeLaunchType::Broadcasting)
-              << NodeDG->getRange();
+    // Check that if a Thread launch node has the NumThreads attribute the
+    // thread group size is (1,1,1)
+    if (NodeLaunchTy == DXIL::NodeLaunchType::Thread) {
+      if (auto NumThreads = FD->getAttr<HLSLNumThreadsAttr>()) {
+        if (NumThreads->getX() != 1 || NumThreads->getY() != 1 ||
+            NumThreads->getZ() != 1) {
+          S.Diags.Report(NumThreads->getLocation(),
+                         diag::err_hlsl_wg_thread_launch_group_size)
+              << NumThreads->getRange();
           // Only output the note if the source location is valid
           if (NodeLaunchLoc.isValid())
             S.Diags.Report(NodeLaunchLoc, diag::note_defined_here)
                 << "Launch type";
         }
-        // NodeMaxDispatchGrid is only valid for Broadcasting nodes
-        if (NodeMDG) {
-          S.Diags.Report(NodeMDG->getLocation(),
-                         diag::err_hlsl_launch_type_attr)
-              << NodeMDG->getSpelling()
-              << ShaderModel::GetNodeLaunchTypeName(
-                     DXIL::NodeLaunchType::Broadcasting)
-              << NodeMDG->getRange();
-          // Only output the note if the source location is valid
+      }
+    } else if (!FD->hasAttr<HLSLNumThreadsAttr>()) {
+      // All other launch types require the NumThreads attribute.
+      S.Diags.Report(FD->getLocation(), diag::err_hlsl_missing_node_attr)
+          << FD->getName() << ShaderModel::GetNodeLaunchTypeName(NodeLaunchTy)
+          << "numthreads";
+    }
+
+    if (isActiveEntry) {
+      if (auto WaveSizeAttr = FD->getAttr<HLSLWaveSizeAttr>()) {
+        std::string profile = S.getLangOpts().HLSLProfile;
+        const ShaderModel *SM = hlsl::ShaderModel::GetByName(profile.c_str());
+        if (!SM->IsSM66Plus()) {
+          S.Diags.Report(WaveSizeAttr->getRange().getBegin(),
+                         diag::err_hlsl_attribute_in_wrong_shader_model)
+              << "wavesize"
+              << "6.6";
+        }
+      }
+    }
+
+    auto *NodeDG = FD->getAttr<HLSLNodeDispatchGridAttr>();
+    auto *NodeMDG = FD->getAttr<HLSLNodeMaxDispatchGridAttr>();
+    if (NodeLaunchTy != DXIL::NodeLaunchType::Broadcasting) {
+      // NodeDispatchGrid is only valid for Broadcasting nodes
+      if (NodeDG) {
+        S.Diags.Report(NodeDG->getLocation(), diag::err_hlsl_launch_type_attr)
+            << NodeDG->getSpelling()
+            << ShaderModel::GetNodeLaunchTypeName(
+                   DXIL::NodeLaunchType::Broadcasting)
+            << NodeDG->getRange();
+        // Only output the note if the source location is valid
+        if (NodeLaunchLoc.isValid())
+          S.Diags.Report(NodeLaunchLoc, diag::note_defined_here)
+              << "Launch type";
+      }
+      // NodeMaxDispatchGrid is only valid for Broadcasting nodes
+      if (NodeMDG) {
+        S.Diags.Report(NodeMDG->getLocation(), diag::err_hlsl_launch_type_attr)
+            << NodeMDG->getSpelling()
+            << ShaderModel::GetNodeLaunchTypeName(
+                   DXIL::NodeLaunchType::Broadcasting)
+            << NodeMDG->getRange();
+        // Only output the note if the source location is valid
+        if (NodeLaunchLoc.isValid())
+          S.Diags.Report(NodeLaunchLoc, diag::note_defined_here)
+              << "Launch type";
+      }
+    } else {
+      // A Broadcasting node must have one of NodeDispatchGrid or
+      // NodeMaxDispatchGrid
+      if (!NodeMDG && !NodeDG)
+        S.Diags.Report(FD->getLocation(),
+                       diag::err_hlsl_missing_dispatchgrid_attr)
+            << FD->getName();
+      // NodeDispatchGrid and NodeMaxDispatchGrid may not be used together
+      if (NodeMDG && NodeDG) {
+        S.Diags.Report(NodeMDG->getLocation(),
+                       diag::err_hlsl_incompatible_node_attr)
+            << FD->getName() << NodeMDG->getSpelling() << NodeDG->getSpelling()
+            << NodeMDG->getRange();
+        S.Diags.Report(NodeDG->getLocation(), diag::note_defined_here)
+            << NodeDG->getSpelling();
+      }
+    }
+
+    if (!FD->getReturnType()->isVoidType())
+      S.Diag(FD->getLocation(), diag::err_shader_must_return_void) << StageName;
+
+    // Check parameter constraints
+    for (unsigned Idx = 0; Idx < FD->getNumParams(); ++Idx) {
+      ParmVarDecl *Param = FD->getParamDecl(Idx);
+
+      // Check any node input is compatible with the node launch type
+      if (hlsl::IsHLSLNodeInputType(Param->getType())) {
+        InputCount++;
+        if (NodeLaunchTy != DXIL::NodeLaunchType::Invalid &&
+            !nodeInputIsCompatible(GetNodeIOType(Param->getType()),
+                                   NodeLaunchTy)) {
+          const RecordType *RT = Param->getType()->getAs<RecordType>();
+          S.Diags.Report(Param->getLocation(), diag::err_hlsl_wg_input_kind)
+              << RT->getDecl()->getName()
+              << ShaderModel::GetNodeLaunchTypeName(NodeLaunchTy)
+              << (static_cast<unsigned>(NodeLaunchTy) - 1)
+              << Param->getSourceRange();
           if (NodeLaunchLoc.isValid())
             S.Diags.Report(NodeLaunchLoc, diag::note_defined_here)
                 << "Launch type";
         }
-      } else {
-        // A Broadcasting node must have one of NodeDispatchGrid or
-        // NodeMaxDispatchGrid
-        if (!NodeMDG && !NodeDG)
-          S.Diags.Report(FD->getLocation(),
-                         diag::err_hlsl_missing_dispatchgrid_attr)
-              << FD->getName();
-        // NodeDispatchGrid and NodeMaxDispatchGrid may not be used together
-        if (NodeMDG && NodeDG) {
-          S.Diags.Report(NodeMDG->getLocation(),
-                         diag::err_hlsl_incompatible_node_attr)
-              << FD->getName() << NodeMDG->getSpelling()
-              << NodeDG->getSpelling() << NodeMDG->getRange();
-          S.Diags.Report(NodeDG->getLocation(), diag::note_defined_here)
-              << NodeDG->getSpelling();
-        }
+        if (InputCount > 1)
+          S.Diags.Report(Param->getLocation(),
+                         diag::err_hlsl_too_many_node_inputs)
+              << FD->getName() << Param->getSourceRange();
       }
 
-      if (!FD->getReturnType()->isVoidType())
-        S.Diag(FD->getLocation(), diag::err_shader_must_return_void)
-            << StageName;
-
-      // Check parameter constraints
-      for (unsigned Idx = 0; Idx < FD->getNumParams(); ++Idx) {
-        ParmVarDecl *Param = FD->getParamDecl(Idx);
-
-        // Check any node input is compatible with the node launch type
-        if (hlsl::IsHLSLNodeInputType(Param->getType())) {
-          InputCount++;
-          if (NodeLaunchTy != DXIL::NodeLaunchType::Invalid &&
-              !nodeInputIsCompatible(GetNodeIOType(Param->getType()),
-                                     NodeLaunchTy)) {
-            const RecordType *RT = Param->getType()->getAs<RecordType>();
-            S.Diags.Report(Param->getLocation(), diag::err_hlsl_wg_input_kind)
-                << RT->getDecl()->getName()
-                << ShaderModel::GetNodeLaunchTypeName(NodeLaunchTy)
-                << (static_cast<unsigned>(NodeLaunchTy) - 1)
-                << Param->getSourceRange();
-            if (NodeLaunchLoc.isValid())
-              S.Diags.Report(NodeLaunchLoc, diag::note_defined_here)
-                  << "Launch type";
-          }
-          if (InputCount > 1)
-            S.Diags.Report(Param->getLocation(),
-                           diag::err_hlsl_too_many_node_inputs)
-                << FD->getName() << Param->getSourceRange();
-        }
-
-        HLSLMaxRecordsSharedWithAttr *ExistingMRSWA =
-            Param->getAttr<HLSLMaxRecordsSharedWithAttr>();
-        if (ExistingMRSWA) {
-          StringRef sharedName = ExistingMRSWA->getName()->getName();
-          unsigned int ArgIdx = 0;
-          bool Found = false;
-          while (ArgIdx < FD->getNumParams()) {
-            const ParmVarDecl *ParamDecl = FD->getParamDecl(ArgIdx);
-            // validation that MRSW doesn't reference its own parameter is
-            // already done at
-            // SemaHLSL.cpp:ValidateMaxRecordsSharedWithAttributes so we don't
-            // need to check that ArgIdx != Idx.
-            if (ParamDecl->getName() == sharedName) {
-              // now we need to check that this parameter has an output record
-              // type.
-              hlsl::NodeFlags nodeFlags;
-              if (GetHLSLNodeIORecordType(ParamDecl, nodeFlags)) {
-                hlsl::NodeIOProperties node(nodeFlags);
-                if (node.Flags.IsOutputNode()) {
-                  Found = true;
-                  break;
-                }
+      HLSLMaxRecordsSharedWithAttr *ExistingMRSWA =
+          Param->getAttr<HLSLMaxRecordsSharedWithAttr>();
+      if (ExistingMRSWA) {
+        StringRef sharedName = ExistingMRSWA->getName()->getName();
+        unsigned int ArgIdx = 0;
+        bool Found = false;
+        while (ArgIdx < FD->getNumParams()) {
+          const ParmVarDecl *ParamDecl = FD->getParamDecl(ArgIdx);
+          // validation that MRSW doesn't reference its own parameter is
+          // already done at
+          // SemaHLSL.cpp:ValidateMaxRecordsSharedWithAttributes so we don't
+          // need to check that ArgIdx != Idx.
+          if (ParamDecl->getName() == sharedName) {
+            // now we need to check that this parameter has an output record
+            // type.
+            hlsl::NodeFlags nodeFlags;
+            if (GetHLSLNodeIORecordType(ParamDecl, nodeFlags)) {
+              hlsl::NodeIOProperties node(nodeFlags);
+              if (node.Flags.IsOutputNode()) {
+                Found = true;
+                break;
               }
             }
-            ArgIdx++;
           }
+          ArgIdx++;
+        }
 
-          if (!Found) {
-            S.Diag(ExistingMRSWA->getLocation(),
-                   diag::err_hlsl_maxrecordssharedwith_references_invalid_arg);
-          }
+        if (!Found) {
+          S.Diag(ExistingMRSWA->getLocation(),
+                 diag::err_hlsl_maxrecordssharedwith_references_invalid_arg);
         }
       }
+    }
+    return;
+  }
+
+  // if this is the Entry FD, then try adding the target profile
+  // shader attribute to the FD and carry on with validation
+  void TryAddShaderAttrFromTargetProfile(Sema &S, FunctionDecl *FD,
+                                         bool &isActiveEntry) {
+    // When isActiveEntry is true and this function is an entry point, this
+    // entry point is used in compilation. This is an important distinction
+    // when diagnosing certain types of errors based on the compilation
+    // parameters. For example, if isActiveEntry is false, diagnostics
+    // dependent on the shader model should not be performed. That way we
+    // won't raise an error about a feature used by the inactive entry that's
+    // not available in the current shader model. Since that entry point is
+    // not used, it may still be valid in another compilation where a
+    // different shader model is specified.
+    isActiveEntry = false;
+    const std::string &EntryPointName = S.getLangOpts().HLSLEntryFunction;
+
+    // if there's no defined entry point, just return
+    if (EntryPointName.empty()) {
       return;
     }
 
-    // if this is the Entry FD, then try adding the target profile
-    // shader attribute to the FD and carry on with validation
-    void TryAddShaderAttrFromTargetProfile(Sema &S, FunctionDecl *FD,
-                                           bool &isActiveEntry) {
-      // When isActiveEntry is true and this function is an entry point, this
-      // entry point is used in compilation. This is an important distinction
-      // when diagnosing certain types of errors based on the compilation
-      // parameters. For example, if isActiveEntry is false, diagnostics
-      // dependent on the shader model should not be performed. That way we
-      // won't raise an error about a feature used by the inactive entry that's
-      // not available in the current shader model. Since that entry point is
-      // not used, it may still be valid in another compilation where a
-      // different shader model is specified.
-      isActiveEntry = false;
-      const std::string &EntryPointName = S.getLangOpts().HLSLEntryFunction;
+    // if this FD isn't the entry point, then we shouldn't add
+    // a shader attribute to this decl, so just return
+    if (EntryPointName != FD->getIdentifier()->getName()) {
+      return;
+    }
 
-      // if there's no defined entry point, just return
-      if (EntryPointName.empty()) {
-        return;
+    std::string profile = S.getLangOpts().HLSLProfile;
+    const ShaderModel *SM = hlsl::ShaderModel::GetByName(profile.c_str());
+    const llvm::StringRef fullName =
+        ShaderModel::FullNameFromKind(SM->GetKind());
+
+    // don't add the attribute for an invalid profile, like library
+    if (fullName.empty()) {
+      return;
+    }
+
+    HLSLShaderAttr *currentShaderAttr = FD->getAttr<HLSLShaderAttr>();
+    // Don't add the attribute if it already exists as an attribute on the
+    // decl. In the special case that the target profile is compute and the
+    // entry decl already has a node shader attr, don't do anything
+    if (currentShaderAttr) {
+      llvm::StringRef currentFullName = currentShaderAttr->getStage();
+      if (currentFullName != fullName) {
+        S.Diag(currentShaderAttr->getLocation(),
+               diag::err_hlsl_profile_conflicts_with_shader_attribute)
+            << fullName << profile << currentFullName << EntryPointName;
       }
+      // Don't add another attr if one exists, to prevent
+      // more unrelated errors down the line.
+      return;
+    }
 
-      // if this FD isn't the entry point, then we shouldn't add
-      // a shader attribute to this decl, so just return
-      if (EntryPointName != FD->getIdentifier()->getName()) {
-        return;
-      }
+    HLSLShaderAttr *pShaderAttr =
+        HLSLShaderAttr::CreateImplicit(S.Context, fullName);
 
-      std::string profile = S.getLangOpts().HLSLProfile;
-      const ShaderModel *SM = hlsl::ShaderModel::GetByName(profile.c_str());
-      const llvm::StringRef fullName =
-          ShaderModel::FullNameFromKind(SM->GetKind());
+    FD->addAttr(pShaderAttr);
+    isActiveEntry = true;
+    return;
+  }
 
-      // don't add the attribute for an invalid profile, like library
-      if (fullName.empty()) {
-        return;
-      }
-
-      HLSLShaderAttr *currentShaderAttr = FD->getAttr<HLSLShaderAttr>();
-      // Don't add the attribute if it already exists as an attribute on the
-      // decl. In the special case that the target profile is compute and the
-      // entry decl already has a node shader attr, don't do anything
-      if (currentShaderAttr) {
-        llvm::StringRef currentFullName = currentShaderAttr->getStage();
-        if (currentFullName != fullName) {
-          S.Diag(currentShaderAttr->getLocation(),
-                 diag::err_hlsl_profile_conflicts_with_shader_attribute)
-              << fullName << profile << currentFullName << EntryPointName;
-        }
-        // Don't add another attr if one exists, to prevent
-        // more unrelated errors down the line.
-        return;
-      }
-
-      HLSLShaderAttr *pShaderAttr =
-          HLSLShaderAttr::CreateImplicit(S.Context, fullName);
-
-      FD->addAttr(pShaderAttr);
+  void DiagnoseEntry(Sema &S, FunctionDecl *FD) {
+    bool isActiveEntry = false;
+    if (S.getLangOpts().IsHLSLLibrary) {
+      // TODO: Analyze -exports option to determine which entries
+      // are active for lib target.
+      // For now, assume all entries are active.
       isActiveEntry = true;
+    } else {
+      TryAddShaderAttrFromTargetProfile(S, FD, isActiveEntry);
+    }
+
+    HLSLShaderAttr *Attr = FD->getAttr<HLSLShaderAttr>();
+    if (!Attr) {
       return;
     }
 
-    void DiagnoseEntry(Sema &S, FunctionDecl *FD) {
-      bool isActiveEntry = false;
-      if (S.getLangOpts().IsHLSLLibrary) {
-        // TODO: Analyze -exports option to determine which entries
-        // are active for lib target.
-        // For now, assume all entries are active.
-        isActiveEntry = true;
-      } else {
-        TryAddShaderAttrFromTargetProfile(S, FD, isActiveEntry);
-      }
+    DXIL::ShaderKind Stage = ShaderModel::KindFromFullName(Attr->getStage());
+    llvm::StringRef StageName = Attr->getStage();
+    DiagnoseEntryAttrAllowedOnStage(&S, FD, Stage);
 
-      HLSLShaderAttr *Attr = FD->getAttr<HLSLShaderAttr>();
-      if (!Attr) {
-        return;
-      }
-
-      DXIL::ShaderKind Stage = ShaderModel::KindFromFullName(Attr->getStage());
-      llvm::StringRef StageName = Attr->getStage();
-      DiagnoseEntryAttrAllowedOnStage(&S, FD, Stage);
-
-      switch (Stage) {
-      case DXIL::ShaderKind::Pixel:
-      case DXIL::ShaderKind::Vertex:
-      case DXIL::ShaderKind::Geometry:
-      case DXIL::ShaderKind::Hull:
-      case DXIL::ShaderKind::Domain:
-      case DXIL::ShaderKind::Library:
-      case DXIL::ShaderKind::Mesh:
-      case DXIL::ShaderKind::Amplification:
-      case DXIL::ShaderKind::Invalid:
-        return;
-      case DXIL::ShaderKind::Callable: {
-        return DiagnoseCallableEntry(S, FD, StageName);
-      }
-      case DXIL::ShaderKind::Miss:
-      case DXIL::ShaderKind::AnyHit: {
-        return DiagnoseMissOrAnyHitEntry(S, FD, StageName, Stage);
-      }
-      case DXIL::ShaderKind::RayGeneration:
-      case DXIL::ShaderKind::Intersection: {
-        return DiagnoseRayGenerationOrIntersectionEntry(S, FD, StageName);
-      }
-      case DXIL::ShaderKind::ClosestHit: {
-        return DiagnoseClosestHitEntry(S, FD, StageName);
-      }
-      case DXIL::ShaderKind::Compute: {
-        return DiagnoseComputeEntry(S, FD, StageName, isActiveEntry);
-      }
-
-      case DXIL::ShaderKind::Node: {
-        // A compute shader may also be a node, so we check it here
-        return DiagnoseNodeEntry(S, FD, StageName, isActiveEntry);
-      }
-      }
+    switch (Stage) {
+    case DXIL::ShaderKind::Pixel:
+    case DXIL::ShaderKind::Vertex:
+    case DXIL::ShaderKind::Geometry:
+    case DXIL::ShaderKind::Hull:
+    case DXIL::ShaderKind::Domain:
+    case DXIL::ShaderKind::Library:
+    case DXIL::ShaderKind::Mesh:
+    case DXIL::ShaderKind::Amplification:
+    case DXIL::ShaderKind::Invalid:
+      return;
+    case DXIL::ShaderKind::Callable: {
+      return DiagnoseCallableEntry(S, FD, StageName);
     }
-    } // namespace hlsl
+    case DXIL::ShaderKind::Miss:
+    case DXIL::ShaderKind::AnyHit: {
+      return DiagnoseMissOrAnyHitEntry(S, FD, StageName, Stage);
+    }
+    case DXIL::ShaderKind::RayGeneration:
+    case DXIL::ShaderKind::Intersection: {
+      return DiagnoseRayGenerationOrIntersectionEntry(S, FD, StageName);
+    }
+    case DXIL::ShaderKind::ClosestHit: {
+      return DiagnoseClosestHitEntry(S, FD, StageName);
+    }
+    case DXIL::ShaderKind::Compute: {
+      return DiagnoseComputeEntry(S, FD, StageName, isActiveEntry);
+    }
+
+    case DXIL::ShaderKind::Node: {
+      // A compute shader may also be a node, so we check it here
+      return DiagnoseNodeEntry(S, FD, StageName, isActiveEntry);
+    }
+    }
+  }
+  } // namespace hlsl
