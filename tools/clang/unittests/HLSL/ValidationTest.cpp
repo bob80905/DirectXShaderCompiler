@@ -4289,25 +4289,25 @@ TEST_F(ValidationTest, ComputeNodeCompatibility) {
       pArguments.data(), 2, nullptr, 0,
       {"!{i32 8, i32 15"}, // original: node shader
       {"!{i32 8, i32 5"},  // changed to: compute shader
-      "Node 'node01' with input/outputs is not compatible with compute", false);
+      "Function 'node01' has unexpected metadata", false);
   RewriteAssemblyCheckMsg(
       L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
       pArguments.data(), 2, nullptr, 0,
       {"!{i32 8, i32 15"}, // original: node shader
       {"!{i32 8, i32 5"},  // changed to: compute shader
-      "Node 'node02' with input/outputs is not compatible with compute", false);
+      "Function 'node02' has unexpected metadata", false);
   RewriteAssemblyCheckMsg(
       L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
       pArguments.data(), 2, nullptr, 0,
       {"!{i32 8, i32 15"}, // original: node shader
       {"!{i32 8, i32 5"},  // changed to: compute shader
-      "Node 'node03' with input/outputs is not compatible with compute", false);
+      "Function 'node03' has unexpected metadata", false);
   RewriteAssemblyCheckMsg(
       L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
       pArguments.data(), 2, nullptr, 0,
       {"!{i32 8, i32 15"}, // original: node shader
       {"!{i32 8, i32 5"},  // changed to: compute shader
-      "Node 'node04' coalescing launch type is not compatible with compute",
+      "Function 'node04' has unexpected metadata",
       false);
   RewriteAssemblyCheckMsg(
       L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
@@ -4316,7 +4316,13 @@ TEST_F(ValidationTest, ComputeNodeCompatibility) {
                                           // launch type
       {"!{i32 8, i32 5, i32 13, i32 3"},  // changed to: compute shader, thread
                                           // launch type
-      "Node 'node04' thread launch type is not compatible with compute", false);
+      "Function 'node04' has unexpected metadata", false);
+  RewriteAssemblyCheckMsg(
+      L"..\\DXILValidation\\compute_node_compatibility.hlsl", "lib_6_8",
+      pArguments.data(), 2, nullptr, 0,
+      {"!{i32 8, i32 15"}, // original: node shader
+      {"!{i32 8, i32 5"},  // changed to: compute shader
+      "Function 'node05' has unexpected metadata", false);
 }
 
 // Check validation error for incompatible node input record types
